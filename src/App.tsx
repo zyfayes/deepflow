@@ -50,33 +50,36 @@ function App() {
 
   return (
     <div className="min-h-screen bg-neutral-100 flex items-center justify-center p-8 font-sans">
-      <div className="flex gap-16 items-center flex-wrap justify-center">
+      <div className="flex gap-8 items-center flex-wrap justify-center transition-all duration-500 flex-row">
         
-        {/* Left: Mobile App */}
-        <div className="flex flex-col items-center gap-4">
+        {/* Device View */}
+        <div className="flex flex-col items-center gap-4 relative">
             <PhoneFrame>
                 <SupplyDepotApp 
                     onStartFlow={startFlow} 
                     onStopFlow={stopFlow}
                     isFlowing={isFlowing}
                     knowledgeCards={knowledgeCards}
+                    onUpdateKnowledgeCards={setKnowledgeCards}
                     currentContext={currentContext}
                     onContextChange={setCurrentContext}
                 />
             </PhoneFrame>
-            <span className="text-xs font-bold text-neutral-400 tracking-widest uppercase">移动终端 (Mobile Terminal)</span>
+            <div className="flex items-center gap-4">
+                <span className="text-xs font-bold text-neutral-400 tracking-widest uppercase">移动终端 (Mobile Terminal)</span>
+            </div>
         </div>
 
-        {/* Right: Hardware Simulator */}
-        <div className="flex flex-col items-center gap-4">
-            <div className="w-[500px] h-[600px] bg-white rounded-[40px] shadow-2xl border border-white/50 flex flex-col overflow-hidden relative ring-1 ring-black/5">
+        {/* Hardware Simulator */}
+        <div className="flex flex-col items-center gap-4 transition-all duration-500 w-[500px]">
+            <div className="bg-white rounded-[40px] shadow-2xl border border-white/50 flex flex-col overflow-hidden relative ring-1 ring-black/5 transition-all duration-500 w-[500px] h-[600px]">
                 
                 {/* Hardware Tabs */}
-                <div className="flex p-2 gap-2 bg-neutral-50/50 backdrop-blur-md border-b border-neutral-100 z-20">
+                <div className="flex bg-neutral-50/50 backdrop-blur-md z-20 flex-row w-full border-b border-neutral-100 p-2 gap-2">
                     <button 
                         onClick={() => setActiveHardware('headset')}
                         className={clsx(
-                            "flex-1 py-3 rounded-2xl flex items-center justify-center gap-2 text-sm font-medium transition-all duration-200",
+                            "rounded-2xl flex items-center justify-center gap-2 text-sm font-medium transition-all duration-200 flex-1 py-3 flex-row",
                             activeHardware === 'headset' ? "bg-white shadow-md text-neutral-800" : "text-neutral-400 hover:bg-white/50"
                         )}
                     >
@@ -86,7 +89,7 @@ function App() {
                     <button 
                         onClick={() => setActiveHardware('printer')}
                         className={clsx(
-                            "flex-1 py-3 rounded-2xl flex items-center justify-center gap-2 text-sm font-medium transition-all duration-200",
+                            "rounded-2xl flex items-center justify-center gap-2 text-sm font-medium transition-all duration-200 flex-1 py-3 flex-row",
                             activeHardware === 'printer' ? "bg-white shadow-md text-neutral-800" : "text-neutral-400 hover:bg-white/50"
                         )}
                     >

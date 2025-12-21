@@ -1,6 +1,7 @@
-import { useState, type MouseEvent } from 'react';
-import { Camera, FileText, Mic, Package, Play, Loader2, Sparkles, Brain, Coffee, Library, Tag, List, Calendar, X, AlignLeft, Users, Radio, MessageCircle, Plus, ChevronUp, Music, CheckCircle, Circle } from 'lucide-react';
+import { useState, useRef, type MouseEvent, type Dispatch, type SetStateAction, useEffect } from 'react';
+import { Camera, FileText, Mic, Package, Play, Loader2, Sparkles, Brain, Coffee, Library, Tag, List, Calendar, X, AlignLeft, Users, Radio, MessageCircle, Plus, ChevronUp, Music, CheckCircle, Circle, ChevronLeft, ChevronRight, AlertCircle, Mic2, Square } from 'lucide-react';
 import clsx from 'clsx';
+import { useLiveSession } from '../hooks/useLiveSession';
 
 export interface KnowledgeCard {
     id: string;
@@ -28,7 +29,9 @@ interface FlowItem {
     scenes: string[];
     subject: string;
     mode: 'single' | 'dual';
-    contentType: 'output' | 'discussion';
+    contentType: 'output' | 'discussion' | 'interactive';
+    script?: { speaker: string; text: string }[];
+    knowledgeCards?: KnowledgeCard[];
 }
 
 interface SupplyDepotAppProps {
@@ -36,12 +39,17 @@ interface SupplyDepotAppProps {
   onStopFlow: () => void;
   isFlowing: boolean;
   knowledgeCards: KnowledgeCard[];
+  onUpdateKnowledgeCards: Dispatch<SetStateAction<KnowledgeCard[]>>;
   currentContext: 'deep_work' | 'casual';
   onContextChange: (context: 'deep_work' | 'casual') => void;
 }
 
-export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCards, currentContext, onContextChange }: SupplyDepotAppProps) {
+export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCards, onUpdateKnowledgeCards, currentContext, onContextChange }: SupplyDepotAppProps) {
   const [rawInputs, setRawInputs] = useState<RawInput[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [currentInputType, setCurrentInputType] = useState<string>('');
+  
   const [archivedInputs, setArchivedInputs] = useState<RawInput[]>([]);
   const [flowItems, setFlowItems] = useState<FlowItem[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -49,97 +57,230 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
   const [gardenTab, setGardenTab] = useState<'cards' | 'files'>('cards');
   const [flowViewMode, setFlowViewMode] = useState<'scenes' | 'list'>('scenes');
   const [selectedItem, setSelectedItem] = useState<FlowItem | null>(null);
-  const [filters, setFilters] = useState({
-    duration: 'all',
-    subject: 'all',
-    mode: 'all',
-    type: 'all'
-  });
+  const [filterPreset, setFilterPreset] = useState('all');
   const [showInputPanel, setShowInputPanel] = useState(false);
   const [isGardenOpen, setIsGardenOpen] = useState(false);
   const [playlistSelection, setPlaylistSelection] = useState<Set<string>>(new Set());
   const [isPlaylistExpanded, setIsPlaylistExpanded] = useState(false);
 
-  const addRawInput = (type: string) => {
-    const newItem: RawInput = {
-      id: Math.random().toString(36).substr(2, 9),
-      type,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      timestamp: Date.now()
-    };
-    setRawInputs(prev => [...prev, newItem]);
+  // Generation Preferences
+  const [genPreset, setGenPreset] = useState('quick_summary');
+  const [generationPreferences, setGenerationPreferences] = useState({
+    duration: 'short',
+    mode: 'single',
+    type: 'output',
+    preset: 'quick_summary'
+  });
+
+  const PRESETS: Record<string, { label: string, duration: string, mode: string, type: string }> = {
+      quick_summary: { label: '速听精华', duration: 'short', mode: 'single', type: 'output' },
+      deep_analysis: { label: '深度剖析', duration: 'long', mode: 'single', type: 'output' },
+      dual_discussion: { label: '双人探讨', duration: 'medium', mode: 'dual', type: 'discussion' },
+      realtime_practice: { label: '实时练习', duration: 'short', mode: 'dual', type: 'interactive' }
   };
 
-  const generateFlowList = () => {
+  useEffect(() => {
+      const p = PRESETS[genPreset];
+      if (p) {
+          setGenerationPreferences({
+              duration: p.duration,
+              mode: p.mode,
+              type: p.type,
+              preset: genPreset
+          });
+      }
+  }, [genPreset]);
+
+
+  // Audio Player State
+  const [audioUrls, setAudioUrls] = useState<{url: string, shortText: string}[]>([]);
+  const [currentAudioIndex, setCurrentAudioIndex] = useState(0);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Live Session State
+  const [isLiveMode, setIsLiveMode] = useState(false);
+  const liveSession = useLiveSession(
+      selectedItem?.script?.map(s => `${s.speaker}: ${s.text}`).join('\n') || '',
+      selectedItem?.knowledgeCards || [],
+      () => console.log("Live Connected"),
+      () => {
+          console.log("Live Disconnected");
+          setIsLiveMode(false);
+      },
+      (error) => {
+          console.error("Live Session Error:", error);
+          alert("连接实时服务失败，请检查网络或稍后重试。");
+          setIsLiveMode(false);
+      }
+  );
+
+  useEffect(() => {
+      if (isLiveMode && !liveSession.isConnected) {
+          liveSession.connect();
+      }
+      return () => {
+          if (isLiveMode) {
+              liveSession.disconnect();
+          }
+      };
+  }, [isLiveMode]);
+
+  useEffect(() => {
+    if (audioRef.current) {
+        audioRef.current.playbackRate = playbackRate;
+    }
+  }, [playbackRate]);
+
+  useEffect(() => {
+      if (audioRef.current && audioUrls.length > 0) {
+          audioRef.current.load(); // Reload audio source
+          audioRef.current.play().catch(e => console.log("Auto-play prevented/pending interaction", e));
+      }
+  }, [currentAudioIndex, audioUrls]);
+
+  const handlePlayAudio = async (item: FlowItem) => {
+    if (!item.script) return;
+    setIsPlayingAudio(true);
+    setAudioError(null);
+    
+    const cleanText = item.script.map(s => `${s.speaker}: ${s.text}`).join('\n');
+
+    try {
+        const response = await fetch('http://localhost:3000/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: cleanText })
+        });
+        const data = await response.json();
+        if (data.urls) {
+            // Convert to proxy URLs
+            const proxyUrls = data.urls.map((u: any) => ({
+                ...u,
+                url: `http://localhost:3000/api/proxy-audio?url=${encodeURIComponent(u.url)}`
+            }));
+            setAudioUrls(proxyUrls);
+            setCurrentAudioIndex(0);
+        }
+    } catch (error) {
+        console.error("TTS Error", error);
+        setIsPlayingAudio(false);
+        setAudioError("Failed to generate audio. Please try again.");
+    }
+  };
+
+  const handleAudioError = (e: any) => {
+      console.error("Audio Load Error", e);
+      setAudioError("Failed to load audio segment. Network error or format not supported.");
+  };
+
+  const addRawInput = (type: string) => {
+    setCurrentInputType(type);
+    if (fileInputRef.current) {
+        // Reset value to allow selecting the same file again
+        fileInputRef.current.value = '';
+        if (type === '图片') fileInputRef.current.accept = "image/*";
+        else if (type === '录音') fileInputRef.current.accept = "audio/*";
+        else fileInputRef.current.accept = ".pdf,.doc,.docx,.txt";
+        fileInputRef.current.click();
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+        const files = Array.from(e.target.files);
+        setSelectedFiles(prev => [...prev, ...files]);
+        
+        // Add visual feedback
+        const newInputs = files.map(() => ({
+            id: Math.random().toString(36).slice(2, 11),
+            type: currentInputType,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            timestamp: Date.now()
+        }));
+        setRawInputs(prev => [...prev, ...newInputs]);
+    }
+  };
+
+  const generateFlowList = async () => {
     if (rawInputs.length === 0) return;
     
     setIsGenerating(true);
-    
-    // Simulate AI processing
-    setTimeout(() => {
+
+    try {
+        const formData = new FormData();
+        selectedFiles.forEach(file => {
+            formData.append('files', file);
+        });
+        
+        // Add generation preferences
+        formData.append('preferences', JSON.stringify(generationPreferences));
+
+        // Use the new API
+        const response = await fetch('http://localhost:3000/api/analyze', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) {
+            throw new Error(`Server error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        
         // Archive raw inputs
         setArchivedInputs(prev => [...prev, ...rawInputs]);
         setRawInputs([]);
+        setSelectedFiles([]);
 
-        // Generate Flow Items
-        const newFlowItems: FlowItem[] = [
-            {
-                id: '1',
-                title: '深度工作引导 - 专注力启动',
-                duration: '05:00',
-                type: 'guide',
-                tldr: '通过呼吸调整和环境扫描，帮助快速进入心流状态。',
-                subtitles: [
-                    { time: '00:00', text: '欢迎开始今天的深度工作。' },
-                    { time: '00:30', text: '请调整呼吸，深吸气...' },
-                    { time: '01:00', text: '排除周围的干扰，专注于当下。' }
-                ],
-                status: 'ready',
-                scenes: ['deep_work'],
-                subject: 'mindfulness',
-                mode: 'single',
-                contentType: 'output'
-            },
-            {
-                id: '2',
-                title: '知识碎片整理 - 关于 AI 的思考',
-                duration: '12:30',
-                type: 'insight',
-                tldr: '汇总了近期关于 LLM Agent 的最新进展与个人思考。',
-                subtitles: [
-                    { time: '00:00', text: '这是基于你刚才上传的文档生成的摘要。' },
-                    { time: '02:15', text: 'Agent 的核心在于规划能力的提升。' },
-                    { time: '05:40', text: '未来的交互模式将更加自然。' }
-                ],
-                status: 'ready',
-                scenes: ['deep_work', 'casual'],
-                subject: 'tech',
-                mode: 'single',
-                contentType: 'output'
-            },
-             {
-                id: '3',
-                title: '行业动态速递 - 科技前沿',
-                duration: '08:45',
-                type: 'news',
-                tldr: '精选了过去 24 小时内最重要的 3 条科技新闻。',
-                subtitles: [
-                    { time: '00:00', text: '第一条新闻关于新的芯片架构。' },
-                    { time: '03:20', text: 'OpenAI 发布了新的模型更新。' }
-                ],
-                status: 'ready',
-                scenes: ['casual'],
-                subject: 'tech',
-                mode: 'dual',
-                contentType: 'discussion'
-            }
-        ];
-      
-      setFlowItems(newFlowItems);
-      setIsGenerating(false);
-      setReadyToFlow(true);
-      setShowInputPanel(false);
-    }, 2000);
+        // Process Knowledge Cards
+        let newCards: KnowledgeCard[] = [];
+        if (data.knowledgeCards && Array.isArray(data.knowledgeCards)) {
+            newCards = data.knowledgeCards.map((card: any) => ({
+                id: Math.random().toString(36).slice(2, 11),
+                title: card.title,
+                content: card.content,
+                tags: card.tags || [],
+                timestamp: new Date()
+            }));
+            onUpdateKnowledgeCards(prev => [...newCards, ...prev]);
+        }
+
+        // Create Flow Item from Podcast Script
+        const subtitles = data.podcastScript ? data.podcastScript.map((line: any, index: number) => ({
+            time: `00:${index < 10 ? '0' + index : index}0`, // Fake timing for now
+            text: `${line.speaker}: ${line.text}`
+        })) : [];
+
+        const aiFlowItem: FlowItem = {
+            id: Math.random().toString(36).slice(2, 11),
+            title: data.title || 'AI 深度分析',
+            duration: '10:00', // Estimate
+            type: 'insight',
+            tldr: data.summary || '基于上传素材的深度解析',
+            subtitles: subtitles,
+            status: 'ready',
+            scenes: ['deep_work', 'casual'],
+            subject: 'tech', // Could be inferred
+            mode: generationPreferences?.preset === 'quick_summary' ? 'single' : 'dual',
+            contentType: generationPreferences?.preset === 'realtime_practice' ? 'interactive' : 
+                         generationPreferences?.preset === 'quick_summary' ? 'output' : 'discussion',
+            script: data.podcastScript,
+            knowledgeCards: newCards
+        };
+
+        setFlowItems(prev => [aiFlowItem, ...prev]);
+        setReadyToFlow(true);
+        setShowInputPanel(false);
+
+    } catch (error) {
+        console.error("Failed to generate flow list:", error);
+        alert("生成失败，请检查后端服务是否启动 (npm run dev in server folder)");
+    } finally {
+        setIsGenerating(false);
+    }
   };
 
   const toggleSelection = (id: string, e: MouseEvent<HTMLButtonElement>) => {
@@ -209,6 +350,31 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                         </span>
                         <span className="text-slate-400 font-mono">{input.time}</span>
                     </div>
+                ))}
+            </div>
+        )}
+
+        {/* Generation Preferences */}
+        {rawInputs.length > 0 && (
+            <div className="grid grid-cols-2 gap-2 mb-4 mt-2">
+                {Object.entries(PRESETS).map(([key, preset]) => (
+                    <button
+                        key={key}
+                        onClick={() => setGenPreset(key)}
+                        className={clsx(
+                            "p-2 rounded-xl border text-left transition-all",
+                            genPreset === key
+                                ? "bg-indigo-50 border-indigo-200 ring-1 ring-indigo-200"
+                                : "bg-slate-50 border-slate-200 hover:bg-slate-100"
+                        )}
+                    >
+                        <div className={clsx("text-xs font-bold mb-0.5", genPreset === key ? "text-indigo-700" : "text-slate-700")}>
+                            {preset.label}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                            {preset.duration === 'short' ? '5m' : preset.duration === 'medium' ? '15m' : '>15m'} · {preset.mode === 'single' ? '单人' : '双人'} · {preset.type === 'output' ? '输出' : '探讨'}
+                        </div>
+                    </button>
                 ))}
             </div>
         )}
@@ -294,6 +460,13 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
 
   return (
     <div className="flex flex-col h-full bg-[#F2F2F7] relative">
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        onChange={handleFileSelect} 
+        className="hidden" 
+        multiple 
+      />
       <div className="px-4 pt-4 pb-2 flex items-start gap-3">
         <button
           onClick={() => setIsGardenOpen(true)}
@@ -306,6 +479,12 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Deep Flow</h1>
           <p className="text-slate-500 text-sm font-medium truncate">准备你的专注素材</p>
         </div>
+        
+        {/* View Toggle - REMOVED (Controlled by parent) */}
+        <div className="flex items-center gap-2">
+            {/* Placeholder for alignment if needed */}
+        </div>
+
         {flowItems.length > 0 && (
           <button
             onClick={() => setShowInputPanel(true)}
@@ -408,7 +587,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                             {input.type === '录音' && <Mic size={14} />}
                           </div>
                           <div className="flex flex-col min-w-0">
-                            <span className="text-sm font-medium text-slate-700 truncate">{input.type}输入 #{input.id.substr(0,4)}</span>
+                            <span className="text-sm font-medium text-slate-700 truncate">{input.type}输入 #{input.id.slice(0, 4)}</span>
                             <span className="text-[10px] text-slate-400 font-mono truncate">{new Date(input.timestamp).toLocaleString()}</span>
                           </div>
                         </div>
@@ -544,54 +723,51 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
               ) : (
                 <div className="space-y-3">
                   <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar">
-                    <select
-                      className="bg-slate-50 text-[10px] border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-indigo-500"
-                      value={filters.duration}
-                      onChange={e => setFilters({...filters, duration: e.target.value})}
+                    <button
+                        onClick={() => setFilterPreset('all')}
+                        className={clsx(
+                            "px-3 py-1.5 rounded-lg text-[10px] font-medium transition-all border whitespace-nowrap",
+                            filterPreset === 'all'
+                                ? "bg-indigo-50 border-indigo-200 text-indigo-700"
+                                : "bg-slate-50 border-slate-100 text-slate-500 hover:bg-slate-100"
+                        )}
                     >
-                      <option value="all">时长: 全部</option>
-                      <option value="short">短 (5m)</option>
-                      <option value="medium">中 (5-15m)</option>
-                      <option value="long">长 (&gt;15m)</option>
-                    </select>
-                    <select
-                      className="bg-slate-50 text-[10px] border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-indigo-500"
-                      value={filters.subject}
-                      onChange={e => setFilters({...filters, subject: e.target.value})}
-                    >
-                      <option value="all">科目: 全部</option>
-                      <option value="tech">科技</option>
-                      <option value="mindfulness">冥想</option>
-                    </select>
-                    <select
-                      className="bg-slate-50 text-[10px] border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-indigo-500"
-                      value={filters.mode}
-                      onChange={e => setFilters({...filters, mode: e.target.value})}
-                    >
-                      <option value="all">模式: 全部</option>
-                      <option value="single">单人</option>
-                      <option value="dual">双人</option>
-                    </select>
-                    <select
-                      className="bg-slate-50 text-[10px] border border-slate-200 rounded-lg px-2 py-1 outline-none focus:border-indigo-500"
-                      value={filters.type}
-                      onChange={e => setFilters({...filters, type: e.target.value})}
-                    >
-                      <option value="all">类型: 全部</option>
-                      <option value="output">单向输出</option>
-                      <option value="discussion">互动探讨</option>
-                    </select>
+                        全部
+                    </button>
+                    {Object.entries(PRESETS).map(([key, preset]) => (
+                        <button
+                            key={key}
+                            onClick={() => setFilterPreset(key)}
+                            className={clsx(
+                                "px-3 py-1.5 rounded-lg text-[10px] font-medium transition-all border whitespace-nowrap",
+                                filterPreset === key
+                                    ? "bg-indigo-50 border-indigo-200 text-indigo-700"
+                                    : "bg-slate-50 border-slate-100 text-slate-500 hover:bg-slate-100"
+                            )}
+                        >
+                            {preset.label}
+                        </button>
+                    ))}
                   </div>
 
                   <div className="space-y-2">
                     {flowItems.filter(item => {
-                      if (filters.subject !== 'all' && item.subject !== filters.subject) return false;
-                      if (filters.mode !== 'all' && item.mode !== filters.mode) return false;
-                      if (filters.type !== 'all' && item.contentType !== filters.type) return false;
+                      if (filterPreset === 'all') return true;
+                      
+                      const preset = PRESETS[filterPreset];
+                      if (!preset) return true;
+
+                      // Check Mode
+                      if (item.mode !== preset.mode) return false;
+                      // Check Type
+                      if (item.contentType !== preset.type) return false;
+                      
+                      // Check Duration
                       const mins = parseInt(item.duration.split(':')[0]);
-                      if (filters.duration === 'short' && mins >= 5) return false;
-                      if (filters.duration === 'medium' && (mins < 5 || mins > 15)) return false;
-                      if (filters.duration === 'long' && mins <= 15) return false;
+                      if (preset.duration === 'short' && mins >= 5) return false;
+                      if (preset.duration === 'medium' && (mins < 5 || mins > 15)) return false;
+                      if (preset.duration === 'long' && mins <= 15) return false;
+
                       return true;
                     }).map(item => (
                       <div
@@ -749,25 +925,158 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
               </div>
 
               {/* Scrollable Content */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-8">
-                  {/* Player Placeholder */}
-                  <div className="w-full aspect-video bg-indigo-900 rounded-3xl flex items-center justify-center relative overflow-hidden shadow-xl">
-                      <div className="absolute inset-0 bg-gradient-to-tr from-black/60 to-transparent z-10" />
-                      <div className="absolute inset-0 flex items-center justify-center gap-1 opacity-20">
-                          {[...Array(20)].map((_, i) => (
-                              <div
-                                key={i}
-                                className="w-2 bg-white rounded-full animate-pulse"
-                                style={{ height: `${(20 + Math.abs(Math.sin(i * 1.7)) * 80).toFixed(0)}%`, animationDelay: `${i * 0.1}s` }}
-                              />
-                          ))}
+              <div className="flex-1 p-6 overflow-y-auto">
+                  {/* Audio Player Section */}
+                  <div className="w-full mb-8">
+                      <div className="w-full bg-slate-900 rounded-3xl p-6 flex flex-col items-center justify-center relative overflow-hidden shadow-xl text-white">
+                      <div className="absolute inset-0 bg-gradient-to-br from-indigo-900/50 to-slate-900 z-0" />
+                      
+                      <div className="relative z-10 flex flex-col items-center gap-4 w-full">
+                          <div className="w-16 h-16 rounded-full bg-indigo-500/20 flex items-center justify-center animate-pulse">
+                              <Music size={32} className="text-indigo-400" />
+                          </div>
+                          
+                          <div className="text-center">
+                              <h3 className="font-bold text-lg">{selectedItem.title}</h3>
+                              <p className="text-sm text-slate-400">DeepFlow Audio • {selectedItem.duration}</p>
+                          </div>
+
+                          {isLiveMode ? (
+                              <div className="w-full flex flex-col items-center gap-4 py-4 mt-4 bg-black/20 rounded-2xl border border-white/10">
+                                  {!liveSession.isConnected ? (
+                                      <div className="flex flex-col items-center justify-center py-8">
+                                          <Loader2 size={24} className="animate-spin text-indigo-400 mb-2" />
+                                          <span className="text-xs text-slate-400">Connecting to Gemini Live...</span>
+                                      </div>
+                                  ) : (
+                                      <>
+                                          <div className="flex items-center gap-2 text-green-400 mb-2">
+                                               <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                                               <span className="text-xs font-bold uppercase tracking-wider">Live Practice Session</span>
+                                          </div>
+                                          
+                                          <div className="w-full h-24 flex items-center justify-center gap-1">
+                                               {[1,2,3,4,5,4,3,2,1].map((h, i) => (
+                                                   <div key={i} className="w-2 bg-indigo-500 rounded-full animate-bounce" style={{ height: h * 8 + 'px', animationDelay: i * 0.1 + 's' }} />
+                                               ))}
+                                          </div>
+                              
+                                          <div className="flex items-center gap-4 mt-4">
+                                               <button 
+                                                   onClick={liveSession.isSpeaking ? liveSession.stopRecording : liveSession.startRecording}
+                                                   className={clsx(
+                                                       "w-16 h-16 rounded-full flex items-center justify-center transition-all shadow-lg",
+                                                       liveSession.isSpeaking ? "bg-red-500 text-white animate-pulse shadow-red-500/50" : "bg-white text-slate-900 hover:scale-105"
+                                                   )}
+                                               >
+                                                   {liveSession.isSpeaking ? <Square fill="currentColor" /> : <Mic2 size={28} />}
+                                               </button>
+                                          </div>
+                                          <p className="text-xs text-slate-400 mt-2">{liveSession.isSpeaking ? "Listening..." : "Tap to Speak"}</p>
+                                      </>
+                                  )}
+                                  
+                                  <button 
+                                      onClick={() => {
+                                          liveSession.disconnect();
+                                          setIsLiveMode(false);
+                                      }}
+                                      className="text-xs text-slate-400 hover:text-white transition-colors mt-2 underline"
+                                  >
+                                      End Session
+                                  </button>
+                              </div>
+                          ) : (
+                              selectedItem.contentType === 'interactive' ? (
+                                <button 
+                                    onClick={() => setIsLiveMode(true)}
+                                    className="mt-4 px-8 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-full font-bold flex items-center gap-2 hover:scale-105 transition-transform shadow-lg shadow-indigo-500/30"
+                                >
+                                    <Mic2 size={18} />
+                                    Start Live Practice
+                                </button>
+                              ) : (
+                                  audioUrls.length > 0 ? (
+                              <div className="w-full mt-4 flex flex-col items-center">
+                                  <div className="w-full flex justify-end mb-2 px-1">
+                                      <button 
+                                          onClick={() => {
+                                              const rates = [1, 1.25, 1.5, 2];
+                                              const nextIndex = (rates.indexOf(playbackRate) + 1) % rates.length;
+                                              setPlaybackRate(rates[nextIndex]);
+                                          }}
+                                          className="text-[10px] font-bold text-slate-400 bg-white/10 px-2 py-1 rounded hover:bg-white/20 transition-colors"
+                                      >
+                                          {playbackRate}x
+                                      </button>
+                                  </div>
+                                  <audio
+                                      ref={audioRef}
+                                      controls
+                                      className="w-full mb-3"
+                                      src={audioUrls[currentAudioIndex]?.url}
+                                      onError={handleAudioError}
+                                      onEnded={() => {
+                                        if (currentAudioIndex < audioUrls.length - 1) {
+                                            setCurrentAudioIndex(prev => prev + 1);
+                                        } else {
+                                            setIsPlayingAudio(false);
+                                        }
+                                    }}
+                                  />
+                                  
+                                  <div className="flex items-center justify-between w-full px-4 mt-2">
+                                      <button 
+                                          onClick={() => setCurrentAudioIndex(prev => Math.max(0, prev - 1))}
+                                          disabled={currentAudioIndex === 0}
+                                          className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors shrink-0"
+                                      >
+                                          <ChevronLeft size={20} />
+                                      </button>
+                                      
+                                      <div className="flex flex-col items-center flex-1 min-w-0 px-2">
+                                        <p className="text-center text-xs text-slate-400 font-mono mb-1">
+                                            Part {currentAudioIndex + 1} / {audioUrls.length}
+                                        </p>
+                                        <p className="text-[10px] text-slate-500 w-full text-center truncate">
+                                            {audioUrls[currentAudioIndex]?.shortText}
+                                        </p>
+                                      </div>
+
+                                      <button 
+                                          onClick={() => setCurrentAudioIndex(prev => Math.min(audioUrls.length - 1, prev + 1))}
+                                          disabled={currentAudioIndex === audioUrls.length - 1}
+                                          className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors shrink-0"
+                                      >
+                                          <ChevronRight size={20} />
+                                      </button>
+                                  </div>
+                              </div>
+                          ) : (
+                              <button 
+                                  onClick={() => handlePlayAudio(selectedItem)}
+                                  disabled={isPlayingAudio}
+                                  className="mt-4 px-8 py-3 bg-white text-slate-900 rounded-full font-bold flex items-center gap-2 hover:scale-105 transition-transform"
+                              >
+                                  {isPlayingAudio ? <Loader2 className="animate-spin" /> : <Play fill="currentColor" />}
+                                  {isPlayingAudio ? "Generating Audio..." : "Play Podcast"}
+                              </button>
+                          )
+                              )
+                          )}
+
+                          {audioError && (
+                              <div className="mt-4 flex items-center gap-2 text-red-400 bg-red-950/30 px-4 py-2 rounded-xl border border-red-500/20 text-xs">
+                                  <AlertCircle size={14} />
+                                  <span>{audioError}</span>
+                              </div>
+                          )}
                       </div>
-                      <button className="w-16 h-16 rounded-full bg-white text-indigo-900 flex items-center justify-center z-20 hover:scale-105 transition-transform">
-                          <Play fill="currentColor" className="ml-1" size={32} />
-                      </button>
+                      </div>
                   </div>
 
-                  {/* TLDR Section */}
+                  <div className="space-y-8">
+                      {/* TLDR Section */}
                   <div className="space-y-3">
                       <div className="flex items-center gap-2 text-indigo-600">
                           <Sparkles size={16} />
@@ -778,21 +1087,58 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                       </div>
                   </div>
 
-                   {/* Timeline Section */}
-                   <div className="space-y-4">
-                      <div className="flex items-center gap-2 text-slate-400">
-                          <AlignLeft size={16} />
-                          <h3 className="text-xs font-bold uppercase tracking-wider">字幕时间线</h3>
+                  {/* Knowledge Cards Section */}
+                  {selectedItem.knowledgeCards && selectedItem.knowledgeCards.length > 0 && (
+                      <div className="space-y-3">
+                          <div className="flex items-center gap-2 text-orange-600">
+                              <Library size={16} />
+                              <h3 className="text-xs font-bold uppercase tracking-wider">核心知识点</h3>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3">
+                              {selectedItem.knowledgeCards.map((card, idx) => (
+                                  <div key={idx} className="bg-orange-50/50 border border-orange-100 p-4 rounded-2xl">
+                                      <h4 className="font-bold text-slate-800 text-sm mb-2">{card.title}</h4>
+                                      <p className="text-xs text-slate-600 leading-relaxed">{card.content}</p>
+                                      {card.tags && (
+                                          <div className="flex gap-2 mt-3">
+                                              {card.tags.map(tag => (
+                                                  <span key={tag} className="px-2 py-0.5 bg-white text-orange-600 text-[10px] rounded border border-orange-100">
+                                                      #{tag}
+                                                  </span>
+                                              ))}
+                                          </div>
+                                      )}
+                                  </div>
+                              ))}
+                          </div>
                       </div>
-                      <div className="space-y-4 relative pl-4 border-l-2 border-slate-100">
-                          {selectedItem.subtitles.map((sub, i) => (
-                              <div key={i} className="relative">
-                                  <div className="absolute left-[-21px] top-1 w-3 h-3 rounded-full bg-slate-200 border-2 border-white" />
-                                  <span className="text-xs font-mono text-slate-400 block mb-1">{sub.time}</span>
-                                  <p className="text-sm text-slate-600">{sub.text}</p>
-                              </div>
-                          ))}
+                  )}
+
+                  {/* Full Script Section */}
+                  {selectedItem.script && (
+                      <div className="space-y-4">
+                          <div className="flex items-center gap-2 text-slate-400">
+                              <AlignLeft size={16} />
+                              <h3 className="text-xs font-bold uppercase tracking-wider">完整逐字稿</h3>
+                          </div>
+                          <div className="space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                              {selectedItem.script.map((line, i) => (
+                                  <div key={i} className="flex flex-col gap-1">
+                                      <div className="flex items-center gap-2">
+                                          <div className={clsx(
+                                              "w-5 h-5 rounded-full flex items-center justify-center shrink-0 font-bold text-[10px]",
+                                              line.speaker === 'Deep' ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700"
+                                          )}>
+                                              {line.speaker[0]}
+                                          </div>
+                                          <div className="text-xs font-bold text-slate-400">{line.speaker}</div>
+                                      </div>
+                                      <p className="text-sm text-slate-800 leading-[1.2]">{line.text}</p>
+                                  </div>
+                              ))}
+                          </div>
                       </div>
+                  )}
                   </div>
               </div>
           </div>

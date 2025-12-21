@@ -1,13 +1,17 @@
 import React from 'react';
+import clsx from 'clsx';
 
 export function PhoneFrame({ children }: { children: React.ReactNode }) {
   return (
-    <div className="relative w-[350px] h-[700px] bg-gray-900 rounded-[50px] p-4 shadow-2xl border-[8px] border-gray-800 ring-1 ring-white/20 select-none">
+    <div className={clsx(
+        "relative bg-gray-900 rounded-[50px] p-4 shadow-2xl border-[8px] border-gray-800 ring-1 ring-white/20 select-none transition-all duration-500",
+        "w-[350px] h-[700px]"
+    )}>
       {/* Dynamic Island */}
       <div className="absolute top-4 left-1/2 -translate-x-1/2 w-[100px] h-[28px] bg-black rounded-full z-50 flex justify-center items-center transition-all duration-300 hover:w-[120px] hover:h-[32px] cursor-default">
         <div className="flex items-center gap-2 opacity-0 hover:opacity-100 transition-opacity duration-300">
-           <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-           <div className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+        <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+        <div className="w-1.5 h-1.5 rounded-full bg-orange-500" />
         </div>
       </div>
       
@@ -33,7 +37,8 @@ export function PhoneFrame({ children }: { children: React.ReactNode }) {
       </div>
       
       {/* Side Buttons */}
-      <div className="absolute top-24 -left-[10px] w-[2px] h-8 bg-gray-700 rounded-l-md" /> {/* Silent */}
+      <div className="absolute bg-gray-700 top-24 -left-[10px] w-[2px] h-8 rounded-l-md" /> {/* Silent/Top Button */}
+      
       <div className="absolute top-36 -left-[10px] w-[2px] h-14 bg-gray-700 rounded-l-md" /> {/* Vol Up */}
       <div className="absolute top-52 -left-[10px] w-[2px] h-14 bg-gray-700 rounded-l-md" /> {/* Vol Down */}
       <div className="absolute top-44 -right-[10px] w-[2px] h-20 bg-gray-700 rounded-r-md" /> {/* Power */}
