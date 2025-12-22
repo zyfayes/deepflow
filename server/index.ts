@@ -12,6 +12,10 @@ import { config } from './config.js';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { setupLiveSession } from './live-session.js';
+import mammoth from 'mammoth';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const WordExtractor = require('word-extractor');
 
 const app = express();
 const port = config.port;
@@ -114,15 +118,79 @@ app.post('/api/analyze', upload.array('files'), async (req, res): Promise<any> =
     const uploadResponses = [];
 
     // 1. Upload files to Gemini
+    const processedFiles = [];
     for (const file of files) {
-      console.log(`Uploading ${file.originalname} (${file.mimetype})...`);
+      // Fix filename encoding (Multer often messes up UTF-8 filenames)
+      const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+      console.log(`Processing ${originalName} (${file.mimetype})...`);
       
+      // Handle Word Documents (.doc, .docx)
+      if (
+        file.mimetype === 'application/msword' || 
+        file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      ) {
+          console.log(`Converting Word document ${originalName} to text...`);
+          try {
+             let textContent = '';
+
+             // Check if it's .doc (binary) or .docx (XML/Zip)
+             // Using mimetype is unreliable, check extension or try both
+             const isDocx = originalName.toLowerCase().endsWith('.docx') || file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+             
+             if (isDocx) {
+                // Use mammoth for .docx
+                const result = await mammoth.extractRawText({ path: file.path });
+                textContent = result.value;
+             } else {
+                // Use word-extractor for .doc
+                const extractor = new WordExtractor();
+                const extracted = await extractor.extract(file.path);
+                textContent = extracted.getBody();
+             }
+             
+             if (!textContent) {
+                throw new Error('No text content extracted from document');
+             }
+
+             // Create a temporary text file
+             const txtPath = file.path + '.txt';
+             fs.writeFileSync(txtPath, textContent);
+             
+             // Upload the TEXT file instead
+             const uploadResponse = await fileManager.uploadFile(txtPath, {
+                mimeType: 'text/plain',
+                displayName: originalName + '.txt',
+             });
+             
+             console.log(`Uploaded converted text for ${originalName} as ${uploadResponse.file.name}`);
+             uploadResponses.push(uploadResponse);
+             
+             // Clean up
+             fs.unlinkSync(txtPath);
+             fs.unlinkSync(file.path);
+             continue; // Skip standard upload
+
+          } catch (conversionError) {
+              console.error(`Failed to convert ${originalName}:`, conversionError);
+              
+              // Clean up the original file since we failed
+              fs.unlinkSync(file.path);
+
+              // Throw error to stop processing this request or just skip this file?
+              // Better to inform frontend, but for now let's skip this file and let others proceed if any.
+              // OR throw to fail the whole request as the user expects this file to be analyzed.
+              throw new Error(`Failed to process Word document: ${originalName}. Please ensure it is a valid .doc or .docx file.`);
+          }
+      }
+
+      // Standard Upload for supported types (PDF, Image, Audio, Video)
+      // Use the fixed originalName for display
       const uploadResponse = await fileManager.uploadFile(file.path, {
         mimeType: file.mimetype,
-        displayName: file.originalname,
+        displayName: originalName,
       });
       
-      console.log(`Uploaded ${file.originalname} as ${uploadResponse.file.name}`);
+      console.log(`Uploaded ${originalName} as ${uploadResponse.file.name}`);
       uploadResponses.push(uploadResponse);
 
       // Clean up local file immediately after upload

@@ -3,7 +3,7 @@ import { detailedDialoguePrompt } from './templates/detailed_dialogue.js';
 import { defaultPrompt } from './templates/default.js';
 import { quickSummaryPrompt } from './templates/quick_summary.js';
 import { deepAnalysisPrompt } from './templates/deep_analysis.js';
-import { realtimePracticePrompt } from './templates/realtime_practice.js';
+import { interactivePracticePrompt } from './templates/interactive_practice.js';
 
 class PromptManager {
     private templates: PromptTemplate[] = [];
@@ -13,7 +13,7 @@ class PromptManager {
         this.registerTemplate(quickSummaryPrompt);
         this.registerTemplate(deepAnalysisPrompt);
         this.registerTemplate(detailedDialoguePrompt);
-        this.registerTemplate(realtimePracticePrompt);
+        this.registerTemplate(interactivePracticePrompt);
         this.registerTemplate(defaultPrompt);
     }
 
@@ -33,7 +33,7 @@ class PromptManager {
             if (preset === 'quick_summary') return this.getTemplate('quick_summary') || defaultPrompt;
             if (preset === 'deep_analysis') return this.getTemplate('deep_analysis') || defaultPrompt;
             if (preset === 'dual_discussion') return this.getTemplate('detailed_dialogue') || defaultPrompt;
-            if (preset === 'realtime_practice') return this.getTemplate('realtime_practice') || defaultPrompt;
+            if (preset === 'interactive_practice') return this.getTemplate('interactive_practice') || defaultPrompt;
         }
 
         // 2. Fallback to criteria matching (Legacy or general usage)

@@ -2,6 +2,7 @@ import { useState, useRef, type MouseEvent, type Dispatch, type SetStateAction, 
 import { Camera, FileText, Mic, Package, Play, Loader2, Sparkles, Brain, Coffee, Library, Tag, List, Calendar, X, AlignLeft, Users, Radio, MessageCircle, Plus, ChevronUp, Music, CheckCircle, Circle, ChevronLeft, ChevronRight, AlertCircle, Mic2, Square } from 'lucide-react';
 import clsx from 'clsx';
 import { useLiveSession } from '../hooks/useLiveSession';
+import { PackingAnimation } from './PackingAnimation';
 
 export interface KnowledgeCard {
     id: string;
@@ -74,9 +75,8 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
 
   const PRESETS: Record<string, { label: string, duration: string, mode: string, type: string }> = {
       quick_summary: { label: '速听精华', duration: 'short', mode: 'single', type: 'output' },
-      deep_analysis: { label: '深度剖析', duration: 'long', mode: 'single', type: 'output' },
-      dual_discussion: { label: '双人探讨', duration: 'medium', mode: 'dual', type: 'discussion' },
-      realtime_practice: { label: '实时练习', duration: 'short', mode: 'dual', type: 'interactive' }
+      deep_analysis: { label: '深度剖析', duration: 'long', mode: 'dual', type: 'discussion' },
+      interactive_practice: { label: '提问练习', duration: 'medium', mode: 'dual', type: 'interactive' }
   };
 
   useEffect(() => {
@@ -265,7 +265,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
             scenes: ['deep_work', 'casual'],
             subject: 'tech', // Could be inferred
             mode: generationPreferences?.preset === 'quick_summary' ? 'single' : 'dual',
-            contentType: generationPreferences?.preset === 'realtime_practice' ? 'interactive' : 
+            contentType: generationPreferences?.preset === 'interactive_practice' ? 'interactive' : 
                          generationPreferences?.preset === 'quick_summary' ? 'output' : 'discussion',
             script: data.podcastScript,
             knowledgeCards: newCards
@@ -313,7 +313,12 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
     .map(id => flowItems.find(item => item.id === id))
     .filter((item): item is FlowItem => Boolean(item));
 
-  const renderInputPanel = () => (
+  const renderInputPanel = () => {
+    if (isGenerating) {
+        return <PackingAnimation />;
+    }
+
+    return (
     <div className="space-y-4">
         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">知识打包 (Pack My Bag)</h3>
         <div className="grid grid-cols-3 gap-3">
@@ -399,7 +404,8 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
             </button>
         )}
     </div>
-  );
+    );
+  };
 
   if (isFlowing) {
     return (
@@ -624,7 +630,8 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
           </div>
         )}
 
-        <div className="bg-white rounded-3xl p-5 shadow-sm min-h-[200px]">
+        {flowItems.length > 0 && (
+        <div className="bg-white rounded-3xl p-5 shadow-sm min-h-[200px] animate-in slide-in-from-bottom-4 duration-500">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Flow List</h3>
             {flowItems.length > 0 && (
@@ -651,18 +658,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
             )}
           </div>
 
-          {isGenerating ? (
-            <div className="h-24 flex flex-col items-center justify-center text-indigo-400 space-y-3">
-              <Loader2 size={24} className="animate-spin" />
-              <span className="text-xs text-indigo-400/60 animate-pulse">正在编排心流内容...</span>
-            </div>
-          ) : flowItems.length === 0 ? (
-            <div className="h-32 flex flex-col items-center justify-center text-slate-300 border-2 border-dashed border-slate-100 rounded-xl">
-              <Package size={24} className="mb-2 opacity-50" />
-              <span className="text-xs">等待生成清单</span>
-            </div>
-          ) : (
-            <div className="space-y-3">
+          <div className="space-y-3">
               {flowViewMode === 'scenes' ? (
                 <div className="space-y-4">
                   {[
@@ -819,8 +815,8 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                 </div>
               )}
             </div>
-          )}
         </div>
+        )}
       </div>
 
       {flowViewMode === 'list' && selectedPlaylistItems.length > 0 && (
