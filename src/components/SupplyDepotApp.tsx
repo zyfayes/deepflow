@@ -15,6 +15,7 @@ export interface KnowledgeCard {
 interface RawInput {
     id: string;
     type: string;
+    name?: string;
     time: string;
     timestamp: number;
 }
@@ -194,9 +195,10 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
         setSelectedFiles(prev => [...prev, ...files]);
         
         // Add visual feedback
-        const newInputs = files.map(() => ({
+        const newInputs = files.map((file) => ({
             id: Math.random().toString(36).slice(2, 11),
             type: currentInputType,
+            name: file.name,
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             timestamp: Date.now()
         }));
@@ -315,7 +317,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
 
   const renderInputPanel = () => {
     if (isGenerating) {
-        return <PackingAnimation />;
+        return <PackingAnimation fileNames={selectedFiles.map(f => f.name)} />;
     }
 
     return (
@@ -347,13 +349,13 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
             <div className="space-y-2 mt-2 pt-2 border-t border-slate-100">
                 {rawInputs.map((input) => (
                     <div key={input.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-50 text-xs">
-                        <span className="text-slate-600 flex items-center gap-2">
-                            {input.type === '图片' && <Camera size={12} />}
-                            {input.type === '文档' && <FileText size={12} />}
-                            {input.type === '录音' && <Mic size={12} />}
-                            {input.type}输入
+                        <span className="text-slate-600 flex items-center gap-2 min-w-0" title={input.name}>
+                            {input.type === '图片' && <Camera size={12} className="shrink-0" />}
+                            {input.type === '文档' && <FileText size={12} className="shrink-0" />}
+                            {input.type === '录音' && <Mic size={12} className="shrink-0" />}
+                            <span className="truncate">{input.name || `${input.type}输入`}</span>
                         </span>
-                        <span className="text-slate-400 font-mono">{input.time}</span>
+                        <span className="text-slate-400 font-mono shrink-0 ml-2">{input.time}</span>
                     </div>
                 ))}
             </div>
@@ -582,8 +584,8 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                   <div className="space-y-2">
                     {archivedInputs.map((input) => (
                       <div key={input.id} className="flex items-center justify-between p-3 rounded-xl bg-white border border-slate-100 shadow-sm">
-                        <div className="flex items-center gap-3">
-                          <div className={clsx("w-8 h-8 rounded-lg flex items-center justify-center",
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={clsx("w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
                             input.type === '图片' ? "bg-blue-100 text-blue-600" :
                             input.type === '文档' ? "bg-orange-100 text-orange-600" :
                             "bg-red-100 text-red-600"
@@ -593,7 +595,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                             {input.type === '录音' && <Mic size={14} />}
                           </div>
                           <div className="flex flex-col min-w-0">
-                            <span className="text-sm font-medium text-slate-700 truncate">{input.type}输入 #{input.id.slice(0, 4)}</span>
+                            <span className="text-sm font-medium text-slate-700 truncate" title={input.name}>{input.name || `${input.type}输入 #${input.id.slice(0, 4)}`}</span>
                             <span className="text-[10px] text-slate-400 font-mono truncate">{new Date(input.timestamp).toLocaleString()}</span>
                           </div>
                         </div>
@@ -890,7 +892,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
         </div>
       )}
 
-      {!(flowViewMode === 'list' && selectedPlaylistItems.length > 0) && (
+      {flowItems.length > 0 && !(flowViewMode === 'list' && selectedPlaylistItems.length > 0) && (
         <div className="absolute left-0 right-0 bottom-0 px-4 pb-4 pt-2">
           <button
             onClick={onStartFlow}

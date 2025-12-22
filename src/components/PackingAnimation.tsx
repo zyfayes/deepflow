@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Camera, FileText, Mic, Box, Sparkles, ArrowDown } from 'lucide-react';
+import { Camera, FileText, Box, Sparkles, ArrowDown, Music } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export function PackingAnimation() {
+interface PackingAnimationProps {
+    fileNames?: string[];
+}
+
+export function PackingAnimation({ fileNames = [] }: PackingAnimationProps) {
   // Stages:
   // 1. gathering: Items appear and move towards center
   // 2. packing: Box appears, items fall in
@@ -13,9 +17,9 @@ export function PackingAnimation() {
 
   useEffect(() => {
     // Sequence timing
-    const t1 = setTimeout(() => setStage('packing'), 1500);
-    const t2 = setTimeout(() => setStage('sealing'), 3000);
-    const t3 = setTimeout(() => setStage('processing'), 4000);
+    const t1 = setTimeout(() => setStage('packing'), 2000); // Give more time to read filenames
+    const t2 = setTimeout(() => setStage('sealing'), 3500);
+    const t3 = setTimeout(() => setStage('processing'), 4500);
 
     return () => {
       clearTimeout(t1);
@@ -23,6 +27,46 @@ export function PackingAnimation() {
       clearTimeout(t3);
     };
   }, []);
+
+  const truncateFileName = (name: string) => {
+    if (name.length <= 12) return name;
+    const extIndex = name.lastIndexOf('.');
+    if (extIndex === -1) return name.slice(0, 9) + '...';
+    
+    const ext = name.slice(extIndex); // .pdf
+    const namePart = name.slice(0, extIndex);
+    
+    // Ensure we keep the extension
+    // We want total length roughly 12-15 chars visually
+    // name: "verylongfilename.pdf" -> "very...pdf"
+    
+    return namePart.slice(0, 6) + '...' + ext;
+  };
+
+  const getFileIcon = (name: string) => {
+      const ext = name.split('.').pop()?.toLowerCase();
+      if (['jpg', 'jpeg', 'png', 'gif'].includes(ext || '')) return <Camera size={16} />;
+      if (['mp3', 'wav', 'm4a'].includes(ext || '')) return <Music size={16} />;
+      return <FileText size={16} />;
+  };
+
+  const itemsToDisplay = fileNames.length > 0 ? fileNames.slice(0, 3) : ['Image.jpg', 'Doc.pdf', 'Voice.mp3'];
+
+  const getPosition = (index: number, total: number) => {
+      if (total === 1) return { x: 0, y: 0, rotate: 0 };
+      if (total === 2) return { 
+          x: index === 0 ? -40 : 40, 
+          y: 0, 
+          rotate: index === 0 ? -5 : 5 
+      };
+      // 3 or more
+      const positions = [
+          { x: -60, y: -40, rotate: -10 },
+          { x: 60, y: -40, rotate: 10 },
+          { x: 0, y: 50, rotate: 5 }
+      ];
+      return positions[index] || positions[0];
+  };
 
   return (
     <div className="relative w-full h-64 flex flex-col items-center justify-center overflow-hidden bg-slate-50/50 rounded-3xl border border-slate-100/50 shadow-inner">
@@ -38,35 +82,25 @@ export function PackingAnimation() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0, scale: 0.5, transition: { duration: 0.5 } }}
             >
-              {/* Item 1: Camera */}
-              <motion.div
-                initial={{ x: -60, y: -40, opacity: 0, rotate: -10 }}
-                animate={{ x: 0, y: 0, opacity: 1, rotate: 0 }}
-                transition={{ delay: 0.1, type: "spring", stiffness: 100 }}
-                className="absolute top-1/2 left-1/2 -mt-6 -ml-6 w-12 h-12 bg-white text-blue-500 rounded-2xl shadow-lg border border-blue-100 flex items-center justify-center z-20"
-              >
-                <Camera size={24} />
-              </motion.div>
-
-              {/* Item 2: File */}
-              <motion.div
-                initial={{ x: 60, y: -40, opacity: 0, rotate: 10 }}
-                animate={{ x: 0, y: 0, opacity: 1, rotate: 0 }}
-                transition={{ delay: 0.3, type: "spring", stiffness: 100 }}
-                className="absolute top-1/2 left-1/2 -mt-6 -ml-6 w-12 h-12 bg-white text-orange-500 rounded-2xl shadow-lg border border-orange-100 flex items-center justify-center z-10"
-              >
-                <FileText size={24} />
-              </motion.div>
-
-              {/* Item 3: Mic */}
-              <motion.div
-                initial={{ x: 0, y: 60, opacity: 0, rotate: 5 }}
-                animate={{ x: 0, y: 0, opacity: 1, rotate: 0 }}
-                transition={{ delay: 0.5, type: "spring", stiffness: 100 }}
-                className="absolute top-1/2 left-1/2 -mt-6 -ml-6 w-12 h-12 bg-white text-red-500 rounded-2xl shadow-lg border border-red-100 flex items-center justify-center z-30"
-              >
-                <Mic size={24} />
-              </motion.div>
+              {itemsToDisplay.map((name, index) => {
+                  const pos = getPosition(index, itemsToDisplay.length);
+                  return (
+                    <motion.div
+                        key={index}
+                        initial={{ x: pos.x * 1.5, y: pos.y * 1.5, opacity: 0, rotate: pos.rotate * 2 }}
+                        animate={{ x: pos.x, y: pos.y, opacity: 1, rotate: pos.rotate }}
+                        transition={{ delay: 0.1 * index, type: "spring", stiffness: 100 }}
+                        className="absolute top-1/2 left-1/2 -mt-6 -ml-12 w-24 h-12 bg-white text-slate-600 rounded-xl shadow-lg border border-slate-100 flex items-center gap-2 px-3 z-20"
+                    >
+                        <div className="text-indigo-500 shrink-0">
+                            {getFileIcon(name)}
+                        </div>
+                        <span className="text-[10px] font-medium truncate leading-tight" title={name}>
+                            {truncateFileName(name)}
+                        </span>
+                    </motion.div>
+                  );
+              })}
             </motion.div>
           )}
         </AnimatePresence>
