@@ -149,10 +149,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Wait for processing (with timeout to prevent 504)
-    // Use shorter timeout to leave more time for content generation
+    // Wait for processing (with timeout to leave time for content generation)
+    // Files are uploaded, now wait for Gemini to process them
     console.log("Waiting for files to be processed...");
-    const processingTimeout = 30000; // 30 seconds max for processing
+    const processingTimeout = 25000; // 25 seconds max for processing (leave 35s for generation)
     
     for (const response of uploadResponses) {
       try {
@@ -210,24 +210,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       preferences
     });
 
+    // Generate content with retry mechanism
+    // Files are already uploaded and processed, so we can retry generation without re-uploading
     console.log("Generating content...");
-    
-    // Generate content with timeout protection (20 seconds for generation)
     const generationStartTime = Date.now();
+    
     let result;
-    try {
-      result = await Promise.race([
-        model.generateContent([prompt, ...fileParts]),
-        new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('内容生成超时（超过20秒）。\n\n建议：\n1. 使用较小的文件\n2. 简化提示内容\n3. 稍后重试')), 20000)
-        )
-      ]);
-    } catch (error: any) {
-      const elapsed = Date.now() - generationStartTime;
-      if (error.message.includes('超时')) {
-        throw error;
+    let lastError: any = null;
+    const maxRetries = 2; // Retry up to 2 times
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          console.log(`Retrying content generation (attempt ${attempt + 1}/${maxRetries + 1})...`);
+          // Wait a bit before retry
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        result = await model.generateContent([prompt, ...fileParts]);
+        const elapsed = Date.now() - generationStartTime;
+        console.log(`Generation successful on attempt ${attempt + 1} (took ${Math.round(elapsed/1000)}s)`);
+        break; // Success, exit retry loop
+      } catch (error: any) {
+        lastError = error;
+        const elapsed = Date.now() - generationStartTime;
+        console.warn(`Generation attempt ${attempt + 1} failed after ${Math.round(elapsed/1000)}s:`, error.message);
+        
+        // If this was the last attempt, throw the error
+        if (attempt === maxRetries) {
+          throw new Error(`内容生成失败（已重试 ${maxRetries} 次，总耗时 ${Math.round(elapsed/1000)}秒）。\n\n错误：${error.message}\n\n文件已上传并处理完成，可以稍后重试生成。`);
+        }
+        
+        // Check if error is retryable (not a timeout from Vercel itself)
+        if (error.message && (error.message.includes('504') || error.message.includes('Gateway Timeout'))) {
+          // Vercel timeout - don't retry, throw immediately
+          throw new Error(`请求超时（${Math.round(elapsed/1000)}秒）。文件已上传并处理完成，请稍后重试生成内容。`);
+        }
       }
-      throw new Error(`内容生成失败（耗时 ${Math.round(elapsed/1000)}秒）：${error.message}`);
+    }
+    
+    if (!result) {
+      throw lastError || new Error('内容生成失败：未知错误');
     }
     
     const responseText = result.response.text();
