@@ -10,16 +10,24 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@vercel/node": "^5.5.16",
+    "axios": "^1.13.2",
     "clsx": "^2.1.1",
+    "formidable": "^3.5.4",
     "framer-motion": "^12.23.26",
+    "google-tts-api": "^2.0.2",
     "lucide-react": "^0.562.0",
+    "mammoth": "^1.11.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "tailwind-merge": "^3.4.0"
+    "tailwind-merge": "^3.4.0",
+    "word-extractor": "^1.0.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@tailwindcss/postcss": "^4.1.18",
+    "@types/formidable": "^3.4.6",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
