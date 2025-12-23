@@ -21,7 +21,7 @@ export function useLiveSession(
     
     const nextStartTimeRef = useRef<number>(0);
 
-    const playAudioChunk = (base64Data: string) => {
+    const playAudioChunk = (base64Data: string, mimeType?: string) => {
         if (!audioContextRef.current) return;
         const ctx = audioContextRef.current;
         const arrayBuffer = base64ToArrayBuffer(base64Data);
@@ -33,8 +33,24 @@ export function useLiveSession(
             float32Data[i] = int16 < 0 ? int16 / 0x8000 : int16 / 0x7FFF;
         }
 
-        // Gemini 2.0 Flash Exp output is typically 24kHz
-        const buffer = ctx.createBuffer(1, float32Data.length, 24000); 
+        // Gemini Live API outputs 24kHz PCM audio by default
+        let sampleRate = 24000;
+        if (mimeType) {
+            // Try to parse sample rate from mimeType (e.g., "audio/pcm;rate=24000")
+            const m = /rate=(\d+)/i.exec(mimeType);
+            if (m) {
+                const parsed = parseInt(m[1], 10);
+                if (!Number.isNaN(parsed) && parsed > 0) {
+                    sampleRate = parsed;
+                }
+            }
+        }
+        // Ensure we always use 24kHz for Gemini Live API output
+        if (sampleRate !== 24000) {
+            console.warn(`Unexpected sample rate ${sampleRate}, using 24000 Hz for Gemini Live API`);
+            sampleRate = 24000;
+        }
+        const buffer = ctx.createBuffer(1, float32Data.length, sampleRate); 
         buffer.getChannelData(0).set(float32Data);
 
         const source = ctx.createBufferSource();
@@ -59,11 +75,18 @@ export function useLiveSession(
             // Reset error flag
             hasErrorRef.current = false;
 
-            // Close existing EventSource connection if any
+            // Close and clean up existing EventSource connection if any
             if (eventSourceRef.current) {
+                // Remove all event listeners
+                eventSourceRef.current.onopen = null;
+                eventSourceRef.current.onmessage = null;
+                eventSourceRef.current.onerror = null;
                 eventSourceRef.current.close();
                 eventSourceRef.current = null;
             }
+
+            // Reset audio timing for new session
+            nextStartTimeRef.current = 0;
 
             // Generate unique session ID
             const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -129,7 +152,7 @@ export function useLiveSession(
                             }
                         }
                     } else if (data.type === 'audio') {
-                        playAudioChunk(data.data);
+                        playAudioChunk(data.data, data.mimeType);
                     } else if (data.type === 'error') {
                         if (!hasErrorRef.current) {
                             hasErrorRef.current = true;
@@ -194,13 +217,15 @@ export function useLiveSession(
 
     const startRecording = async () => {
         if (!audioContextRef.current) {
-            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+            // Use default sample rate for best playback quality (usually 44.1kHz or 48kHz)
+            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
         } else if (audioContextRef.current.state === 'suspended') {
             await audioContextRef.current.resume();
         }
         
         const ctx = audioContextRef.current;
         try {
+            // Request 16kHz from microphone if possible
             const stream = await navigator.mediaDevices.getUserMedia({ audio: {
                 channelCount: 1,
                 sampleRate: 16000
@@ -208,14 +233,37 @@ export function useLiveSession(
             streamRef.current = stream;
 
             const source = ctx.createMediaStreamSource(stream);
-            // Buffer size 4096 gives ~0.25s latency at 16k
+            // Buffer size 4096
             const processor = ctx.createScriptProcessor(4096, 1, 1);
             processorRef.current = processor;
 
             processor.onaudioprocess = (e) => {
                 const inputData = e.inputBuffer.getChannelData(0);
+                
+                // Downsample to 16kHz if context is running at higher rate
+                let processData = inputData;
+                const targetRate = 16000;
+                
+                if (ctx.sampleRate > targetRate) {
+                    const ratio = Math.ceil(ctx.sampleRate / targetRate);
+                    const newLength = Math.floor(inputData.length / ratio);
+                    const downsampled = new Float32Array(newLength);
+                    
+                    for (let i = 0; i < newLength; i++) {
+                        // Simple decimation with averaging to reduce aliasing
+                        let sum = 0;
+                        const offset = i * ratio;
+                        const count = Math.min(ratio, inputData.length - offset);
+                        for (let j = 0; j < count; j++) {
+                            sum += inputData[offset + j];
+                        }
+                        downsampled[i] = sum / count;
+                    }
+                    processData = downsampled;
+                }
+
                 // Convert to PCM 16-bit
-                const pcmData = floatTo16BitPCM(inputData);
+                const pcmData = floatTo16BitPCM(processData);
                 const base64 = arrayBufferToBase64(pcmData.buffer as ArrayBuffer);
 
                 if (isConnected) {
@@ -252,8 +300,12 @@ export function useLiveSession(
     const disconnect = useCallback(async () => {
         stopRecording();
         
-        // Close EventSource
+        // Close EventSource and remove all event listeners
         if (eventSourceRef.current) {
+            // Remove event listeners by setting them to null
+            eventSourceRef.current.onopen = null;
+            eventSourceRef.current.onmessage = null;
+            eventSourceRef.current.onerror = null;
             eventSourceRef.current.close();
             eventSourceRef.current = null;
         }
@@ -278,11 +330,24 @@ export function useLiveSession(
         // Clear audio queue
         audioQueueRef.current = [];
 
-        // Don't close AudioContext immediately as it might cut off playback, 
-        // but for "End Session" it's fine.
-        audioContextRef.current?.close();
-        audioContextRef.current = null;
+        // Reset audio timing
+        nextStartTimeRef.current = 0;
+
+        // Reset error flag
+        hasErrorRef.current = false;
+
+        // Close AudioContext
+        if (audioContextRef.current) {
+            audioContextRef.current.close().catch(err => {
+                console.warn('Error closing AudioContext:', err);
+            });
+            audioContextRef.current = null;
+        }
+
+        // Reset all states
         setIsConnected(false);
+        setIsSpeaking(false);
+        
         onDisconnect?.();
     }, [onDisconnect]);
 

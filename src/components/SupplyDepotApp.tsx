@@ -1,5 +1,5 @@
 import { useState, useRef, type MouseEvent, type Dispatch, type SetStateAction, useEffect } from 'react';
-import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Coffee, Library, Tag, List, Calendar, X, AlignLeft, Users, Radio, MessageCircle, Plus, ChevronUp, Music, CheckCircle, Circle, ChevronLeft, ChevronRight, AlertCircle, Mic2, Square, Copy, Check } from 'lucide-react';
+import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Coffee, Library, Tag, List, Calendar, X, AlignLeft, Users, Radio, MessageCircle, Plus, ChevronUp, Music, CheckCircle, Circle, ChevronLeft, ChevronRight, AlertCircle, Mic2, Square, Copy, Check, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { useLiveSession } from '../hooks/useLiveSession';
 import { PackingAnimation } from './PackingAnimation';
@@ -66,6 +66,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
   const [isGardenOpen, setIsGardenOpen] = useState(false);
   const [playlistSelection, setPlaylistSelection] = useState<Set<string>>(new Set());
   const [isPlaylistExpanded, setIsPlaylistExpanded] = useState(false);
+  const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{ show: boolean; fileId: string | null; fileName: string | null }>({ show: false, fileId: null, fileName: null });
 
   // Generation Preferences
   const [genPreset, setGenPreset] = useState('quick_summary');
@@ -93,6 +94,30 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
           });
       }
   }, [genPreset]);
+
+  // Load archived inputs from localStorage on mount
+  useEffect(() => {
+      try {
+          const stored = localStorage.getItem('deepflow_archived_inputs');
+          if (stored) {
+              const parsed = JSON.parse(stored);
+              if (Array.isArray(parsed)) {
+                  setArchivedInputs(parsed);
+              }
+          }
+      } catch (error) {
+          console.error('Failed to load archived inputs from localStorage:', error);
+      }
+  }, []);
+
+  // Save archived inputs to localStorage whenever they change
+  useEffect(() => {
+      try {
+          localStorage.setItem('deepflow_archived_inputs', JSON.stringify(archivedInputs));
+      } catch (error) {
+          console.error('Failed to save archived inputs to localStorage:', error);
+      }
+  }, [archivedInputs]);
 
 
   // Audio Player State
@@ -563,7 +588,8 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
         
         // Use the new API with timeout
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 65000); // 65s timeout (slightly more than Vercel's 60s)
+        // Increase timeout to 5 minutes (300s) for large content generation
+        const timeoutId = setTimeout(() => controller.abort(), 300000); 
         
         let response: Response;
         try {
@@ -618,9 +644,66 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
         }
 
         setGenerationProgress('正在生成内容...');
-        const data = await response.json();
         
-        // Check if response contains error
+        // Handle streaming response
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedText = '';
+        
+        if (reader) {
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value, { stream: true });
+                    accumulatedText += chunk;
+                    
+                    // Update progress to show liveness
+                    setGenerationProgress(`正在生成内容... (${accumulatedText.length} 字符)`);
+                }
+            } catch (streamError) {
+                console.error("Stream reading error:", streamError);
+                throw new Error("STREAM_ERROR");
+            }
+        } else {
+            // Fallback for non-streaming response (should not happen with new backend)
+            accumulatedText = await response.text();
+        }
+        
+        console.log("Generation complete, parsing JSON...");
+        setGenerationProgress('正在处理结果...');
+
+        // Parse JSON from the accumulated text (which might contain markdown)
+        let data: any;
+        try {
+            // Look for JSON object in the text (handling potential markdown code blocks)
+            const jsonMatch = accumulatedText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                data = JSON.parse(jsonMatch[0]);
+            } else {
+                console.warn("No JSON object found in response, trying to parse full text");
+                // Try parsing the whole thing if no braces found (unlikely but possible)
+                data = JSON.parse(accumulatedText);
+            }
+        } catch (parseError) {
+            console.error("Failed to parse JSON from response:", parseError);
+            console.log("Raw response:", accumulatedText);
+            
+            // If it looks like an error message from backend (but in text format)
+            if (accumulatedText.includes('"error"')) {
+                try {
+                    const errObj = JSON.parse(accumulatedText);
+                    if (errObj.error) {
+                         throw new Error(`SERVER_ERROR|${errObj.error}`);
+                    }
+                } catch (e) {}
+            }
+            
+            throw new Error(`PARSE_ERROR|无法解析服务器响应。请重试。`);
+        }
+        
+        // Check if response contains error (logical error)
         if (data.error) {
             // Check if error suggests retry
             const isRetryable = data.error.includes('超时') || 
@@ -692,7 +775,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
         let canRetry = false;
         
         if (error.message === 'TIMEOUT_ERROR') {
-            errorMessage = "请求超时（65秒）\n\n可能原因：\n1. 文件过大\n2. 服务器繁忙\n\n建议：\n1. 使用较小的文件\n2. 点击「重试」按钮";
+            errorMessage = "请求超时（300秒）\n\n可能原因：\n1. 文件过大\n2. 服务器繁忙\n\n建议：\n1. 使用较小的文件\n2. 点击「重试」按钮";
             canRetry = true;
         } else if (error.message === 'NETWORK_ERROR') {
             errorMessage = "生成失败，无法连接到后端服务\n\n请检查：\n1. 后端服务是否已启动\n2. 网络连接是否正常";
@@ -751,6 +834,21 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
       next.delete(id);
       return next;
     });
+  };
+
+  const handleDeleteFile = (fileId: string, fileName: string | undefined) => {
+    setDeleteConfirmDialog({ show: true, fileId, fileName: fileName || null });
+  };
+
+  const confirmDeleteFile = () => {
+    if (deleteConfirmDialog.fileId) {
+      setArchivedInputs(prev => prev.filter(input => input.id !== deleteConfirmDialog.fileId));
+      setDeleteConfirmDialog({ show: false, fileId: null, fileName: null });
+    }
+  };
+
+  const cancelDeleteFile = () => {
+    setDeleteConfirmDialog({ show: false, fileId: null, fileName: null });
   };
 
   const selectedPlaylistItems = Array.from(playlistSelection)
@@ -1048,7 +1146,19 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                             <span className="text-[10px] text-slate-400 font-mono truncate">{new Date(input.timestamp).toLocaleString()}</span>
                           </div>
                         </div>
-                        <span className="text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500 shrink-0">已归档</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">已归档</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteFile(input.id, input.name);
+                            }}
+                            className="w-7 h-7 rounded-lg bg-slate-100 text-slate-500 hover:bg-red-50 hover:text-red-600 flex items-center justify-center transition-colors"
+                            aria-label="删除文件"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1070,6 +1180,40 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
               </button>
             </div>
             {renderInputPanel()}
+          </div>
+        </div>
+      )}
+
+      {deleteConfirmDialog.show && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center p-6">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={cancelDeleteFile} />
+          <div className="relative bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center gap-4">
+              <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
+                <Trash2 size={24} className="text-red-600" />
+              </div>
+              <div className="text-center">
+                <h3 className="text-lg font-bold text-slate-900 mb-2">确认删除</h3>
+                <p className="text-sm text-slate-600">
+                  确定要删除文件 <span className="font-medium text-slate-900">"{deleteConfirmDialog.fileName || '未命名文件'}"</span> 吗？
+                </p>
+                <p className="text-xs text-slate-400 mt-2">此操作无法撤销</p>
+              </div>
+              <div className="flex gap-3 w-full">
+                <button
+                  onClick={cancelDeleteFile}
+                  className="flex-1 py-3 rounded-xl bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={confirmDeleteFile}
+                  className="flex-1 py-3 rounded-xl bg-red-600 text-white font-medium hover:bg-red-700 transition-colors"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

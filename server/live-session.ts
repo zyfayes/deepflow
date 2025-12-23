@@ -33,7 +33,7 @@ function getGeminiApiKey(): string {
   return config.geminiApiKey;
 }
 
-function createGeminiConnection(sessionId: string, script: string, knowledgeCards: any[]): WebSocket {
+function createGeminiConnection(sessionId: string, script: string, knowledgeCards: any[], modelName: string = "models/gemini-2.5-flash-native-audio-preview-12-2025"): WebSocket {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY not configured');
@@ -46,26 +46,33 @@ function createGeminiConnection(sessionId: string, script: string, knowledgeCard
     console.log(`[${sessionId}] Connected to Gemini Live API`);
     
     // Send setup message
+    // Using latest native audio model: gemini-2.5-flash-native-audio-preview-12-2025
+    // Fallback to gemini-2.0-flash-exp if this model is not available
     const setupMsg = {
       setup: {
-        model: "models/gemini-2.0-flash-exp",
+        model: modelName,
         generation_config: {
           response_modalities: ["AUDIO"],
           speech_config: {
-            voice_config: { prebuilt_voice_config: { voice_name: "Puck" } }
+            voice_config: {
+              prebuilt_voice_config: {
+                voice_name: "Aoede"
+              }
+            }
           }
         },
         system_instruction: {
           parts: [
-            { text: "You are an AI tutor helping the user practice. Here is the context:" },
+            { text: "你是一位亲切友好的AI导师，正在帮助用户进行学习练习。请使用中文进行对话，偶尔可以包含英文单词或短语。使用自然、亲切的语调，就像一位耐心的老师在与学生交流。以下是练习脚本和知识点：" },
             { text: script },
-            { text: "Here are key knowledge points:" },
+            { text: "关键知识点：" },
             { text: JSON.stringify(knowledgeCards) },
-            { text: "Conduct a natural conversation to help the user master these points. Be encouraging but correct mistakes. Do not be too verbose." }
+            { text: "请进行自然的中文对话，鼓励学习者，但要及时纠正错误。回答要简洁明了，避免冗长。使用亲切、温和的女声语调，让对话更加自然流畅。" }
           ]
         }
       }
     };
+    console.log(`[${sessionId}] Using model: ${modelName}`);
     geminiWs.send(JSON.stringify(setupMsg));
   });
 
@@ -74,7 +81,14 @@ function createGeminiConnection(sessionId: string, script: string, knowledgeCard
   });
 
   geminiWs.on('close', (code, reason) => {
-    console.log(`[${sessionId}] Gemini Connection Closed:`, code, reason.toString());
+    const reasonStr = reason.toString();
+    console.log(`[${sessionId}] Gemini Connection Closed:`, code, reasonStr);
+    
+    // Check if it's a model-related error
+    if (code === 400 && (reasonStr.includes('model') || reasonStr.includes('invalid'))) {
+      console.warn(`[${sessionId}] Model ${modelName} may not be available, consider using fallback model`);
+    }
+    
     const session = sessions.get(sessionId);
     if (session) {
       session.isActive = false;
@@ -108,6 +122,7 @@ router.all('/', async (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
+      res.write(':ok\n\n');
 
       // Get or create session
       let session = sessions.get(sessionId);
@@ -138,7 +153,8 @@ router.all('/', async (req, res) => {
                 try {
                   res.write(`data: ${JSON.stringify({ 
                     type: 'audio',
-                    data: part.inlineData.data 
+                    data: part.inlineData.data,
+                    mimeType: part.inlineData.mimeType
                   })}\n\n`);
                 } catch (writeError) {
                   console.error(`[${sessionId}] Failed to write SSE data:`, writeError);
@@ -153,39 +169,100 @@ router.all('/', async (req, res) => {
 
       // Create Gemini connection if not exists
       if (!session.geminiWs || session.geminiWs.readyState !== WebSocket.OPEN) {
-        try {
-          session.geminiWs = createGeminiConnection(sessionId, session.script, session.knowledgeCards);
-          
-          session.geminiWs.on('message', handleGeminiMessage);
-          
-          // Wait for connection to open
-          await new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(() => {
-              reject(new Error('Connection timeout'));
-            }, 10000);
-            
-            session.geminiWs!.on('open', () => {
-              clearTimeout(timeout);
-              resolve();
-            });
-            
-            session.geminiWs!.on('error', (err) => {
-              clearTimeout(timeout);
-              reject(err);
-            });
-          });
+        let connectionSuccess = false;
+        const modelsToTry = [
+          "models/gemini-2.5-flash-native-audio-preview-12-2025",
+          "models/gemini-2.0-flash-exp"
+        ];
+        
+        for (const modelName of modelsToTry) {
+          try {
+            // If there was a closed/closing socket, clean it up
+            if (session.geminiWs) {
+              try {
+                session.geminiWs.terminate();
+              } catch (e) {}
+              session.geminiWs = null;
+            }
 
+            session.geminiWs = createGeminiConnection(sessionId, session.script, session.knowledgeCards, modelName);
+            
+            // Remove any existing message listeners before adding new one
+            session.geminiWs.removeAllListeners('message');
+            session.geminiWs.on('message', handleGeminiMessage);
+            
+            // Wait for connection to open
+            await new Promise<void>((resolve, reject) => {
+              const timeout = setTimeout(() => {
+                reject(new Error('Connection timeout'));
+              }, 10000);
+              
+              const onOpen = () => {
+                clearTimeout(timeout);
+                session?.geminiWs?.removeListener('open', onOpen);
+                session?.geminiWs?.removeListener('error', onError);
+                session?.geminiWs?.removeListener('close', onClose);
+                resolve();
+              };
+
+              const onError = (err: Error) => {
+                clearTimeout(timeout);
+                session?.geminiWs?.removeListener('open', onOpen);
+                session?.geminiWs?.removeListener('error', onError);
+                session?.geminiWs?.removeListener('close', onClose);
+                reject(err);
+              };
+              
+              const onClose = (code: number, reason: Buffer) => {
+                const reasonStr = reason.toString();
+                if (code === 400 && (reasonStr.includes('model') || reasonStr.includes('invalid'))) {
+                  clearTimeout(timeout);
+                  session?.geminiWs?.removeListener('open', onOpen);
+                  session?.geminiWs?.removeListener('error', onError);
+                  session?.geminiWs?.removeListener('close', onClose);
+                  reject(new Error(`Model ${modelName} not available`));
+                }
+              };
+              
+              session!.geminiWs!.on('open', onOpen);
+              session!.geminiWs!.on('error', onError);
+              session!.geminiWs!.on('close', onClose);
+            });
+
+            connectionSuccess = true;
+            console.log(`[${sessionId}] Successfully connected with model: ${modelName}`);
+            break;
+          } catch (error: any) {
+            console.warn(`[${sessionId}] Failed to connect with model ${modelName}:`, error.message);
+            if (session.geminiWs) {
+              try {
+                session.geminiWs.terminate();
+              } catch (e) {}
+              session.geminiWs = null;
+            }
+            
+            // If this is the last model, fail
+            if (modelName === modelsToTry[modelsToTry.length - 1]) {
+              if (!res.headersSent) {
+                res.write(`data: ${JSON.stringify({ 
+                  type: 'error', 
+                  message: `Failed to connect: ${error.message}` 
+                })}\n\n`);
+              }
+              res.end();
+              return;
+            }
+            // Otherwise, try next model
+            continue;
+          }
+        }
+        
+        if (connectionSuccess) {
           res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
-        } catch (error: any) {
-          res.write(`data: ${JSON.stringify({ 
-            type: 'error', 
-            message: error.message 
-          })}\n\n`);
-          res.end();
-          return;
         }
       } else {
-        // Reuse existing connection
+        // Reuse existing connection - remove old listeners first to prevent duplicates
+        session.geminiWs.removeAllListeners('message');
         session.geminiWs.on('message', handleGeminiMessage);
         res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
       }
@@ -197,7 +274,7 @@ router.all('/', async (req, res) => {
           session.geminiWs.send(JSON.stringify({
             realtime_input: {
               media_chunks: [{
-                mime_type: "audio/pcm",
+                mime_type: "audio/pcm;rate=16000",
                 data: chunk.data
               }]
             }
@@ -208,18 +285,33 @@ router.all('/', async (req, res) => {
       // Handle client disconnect
       req.on('close', () => {
         console.log(`[${sessionId}] SSE connection closed`);
-        session!.isActive = false;
-        // Don't close Gemini connection immediately, keep it for a bit
+        if (session) {
+          session.isActive = false;
+          // Remove this response's listener to prevent writing to closed response
+          if (session.geminiWs) {
+             session.geminiWs.removeListener('message', handleGeminiMessage);
+          }
+        }
       });
 
       // Keep connection alive
       const keepAlive = setInterval(() => {
-        res.write(`data: ${JSON.stringify({ type: 'ping' })}\n\n`);
+        if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ type: 'ping' })}\n\n`);
+        }
       }, 30000);
 
       // Cleanup on close
       req.on('close', () => {
         clearInterval(keepAlive);
+        console.log(`[${sessionId}] SSE connection closed by client`);
+        if (session) {
+          session.isActive = false;
+          // Remove this response's listener to prevent writing to closed response
+          if (session.geminiWs) {
+             session.geminiWs.removeListener('message', handleGeminiMessage);
+          }
+        }
       });
 
       return;
@@ -262,7 +354,7 @@ router.all('/', async (req, res) => {
           session.geminiWs.send(JSON.stringify({
             realtime_input: {
               media_chunks: [{
-                mime_type: "audio/pcm",
+                mime_type: "audio/pcm;rate=16000",
                 data: audioData
               }]
             }
@@ -284,6 +376,8 @@ router.all('/', async (req, res) => {
         const session = sessions.get(sessionId);
         if (session) {
           if (session.geminiWs) {
+            // Remove all listeners before closing
+            session.geminiWs.removeAllListeners();
             session.geminiWs.close();
           }
           sessions.delete(sessionId);

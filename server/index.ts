@@ -10,6 +10,7 @@ import { promptManager } from './prompts/index.js';
 import { config } from './config.js';
 
 import { createServer } from 'http';
+import net from 'net';
 import liveSessionRouter from './live-session.js';
 import mammoth from 'mammoth';
 import { createRequire } from 'module';
@@ -44,7 +45,16 @@ if (process.env.HTTP_PROXY || process.env.HTTPS_PROXY) {
 }
 
 const app = express();
-const port = config.port;
+const port = Number(config.port);
+
+// Global error handling to prevent crash
+process.on('uncaughtException', (err) => {
+  console.error('CRITICAL: Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('CRITICAL: Unhandled Rejection at:', promise, 'reason:', reason);
+});
 
 // Create HTTP server
 const server = createServer(app);
@@ -300,34 +310,35 @@ app.post('/api/analyze', upload.array('files'), async (req, res): Promise<any> =
         preferences
     });
 
-    console.log("Generating content...");
-    const result = await model.generateContent([
-      prompt,
-      ...fileParts
-    ]);
-
-    const responseText = result.response.text();
-    console.log("Generation complete.");
+    console.log("Generating content (streaming)...");
     
-    // Clean up: Delete files from Gemini to save storage (optional, but good practice)
-    // for (const response of uploadResponses) {
-    //   await fileManager.deleteFile(response.file.name);
-    // }
-
-    // Parse JSON safely
-    let parsedData;
     try {
-        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-            parsedData = JSON.parse(jsonMatch[0]);
-        } else {
-            parsedData = { raw: responseText };
-        }
-    } catch (e) {
-        parsedData = { raw: responseText, error: "Failed to parse JSON" };
-    }
+        const result = await model.generateContentStream([
+            prompt,
+            ...fileParts
+        ]);
 
-    res.json(parsedData);
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Transfer-Encoding', 'chunked');
+
+        for await (const chunk of result.stream) {
+            const chunkText = chunk.text();
+            res.write(chunkText);
+        }
+        res.end();
+        console.log("Stream generation complete.");
+    } catch (streamError) {
+        console.error("Stream generation failed:", streamError);
+        // If we haven't sent headers yet, send JSON error
+        if (!res.headersSent) {
+            throw streamError;
+        } else {
+            // If headers sent, we can't send JSON error. 
+            // End the stream with a specific error marker if needed, or just end it.
+            // For now, just end. The client will fail to parse JSON.
+            res.end();
+        }
+    }
 
   } catch (error: any) {
     console.error("Error processing request:", error);
@@ -345,7 +356,45 @@ app.post('/api/analyze', upload.array('files'), async (req, res): Promise<any> =
   }
 });
 
-server.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
-  console.log(`API Key configured: ${!!apiKey}`);
+function checkPortInUse(targetPort: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const tester = net.createServer()
+      .once('error', (err: any) => {
+        if (err.code === 'EADDRINUSE') {
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      })
+      .once('listening', () => {
+        tester.close(() => resolve(false));
+      })
+      .listen(targetPort);
+  });
+}
+
+server.on('error', (err: any) => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.warn(`⚠️  Port ${port} is already in use. A server instance may already be running.`);
+    console.warn(`   This process will exit gracefully without crashing.`);
+    try {
+      server.close();
+    } catch {}
+    process.exit(0);
+  } else {
+    console.error('Server error:', err);
+  }
 });
+
+(async () => {
+  const inUse = await checkPortInUse(port);
+  if (inUse) {
+    console.warn(`⚠️  Detected existing server at http://localhost:${port}. Skipping new start.`);
+    process.exit(0);
+    return;
+  }
+  server.listen(port, () => {
+    console.log(`Server running at http://localhost:${port}`);
+    console.log(`API Key configured: ${!!apiKey}`);
+  });
+})();
