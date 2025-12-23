@@ -1,8 +1,9 @@
 import { useState, useRef, type MouseEvent, type Dispatch, type SetStateAction, useEffect } from 'react';
-import { Camera, FileText, Mic, Package, Play, Loader2, Sparkles, Brain, Coffee, Library, Tag, List, Calendar, X, AlignLeft, Users, Radio, MessageCircle, Plus, ChevronUp, Music, CheckCircle, Circle, ChevronLeft, ChevronRight, AlertCircle, Mic2, Square } from 'lucide-react';
+import { Camera, FileText, Mic, Package, Play, Loader2, Sparkles, Brain, Coffee, Library, Tag, List, Calendar, X, AlignLeft, Users, Radio, MessageCircle, Plus, ChevronUp, Music, CheckCircle, Circle, ChevronLeft, ChevronRight, AlertCircle, Mic2, Square, Copy, Check } from 'lucide-react';
 import clsx from 'clsx';
 import { useLiveSession } from '../hooks/useLiveSession';
 import { PackingAnimation } from './PackingAnimation';
+import { getApiUrl } from '../utils/api-config';
 
 export interface KnowledgeCard {
     id: string;
@@ -100,6 +101,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
   const [audioError, setAudioError] = useState<string | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const [copiedScript, setCopiedScript] = useState(false);
 
   // Live Session State
   const [isLiveMode, setIsLiveMode] = useState(false);
@@ -150,7 +152,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
     const cleanText = item.script.map(s => `${s.speaker}: ${s.text}`).join('\n');
 
     try {
-        const response = await fetch('http://localhost:3000/api/tts', {
+        const response = await fetch(getApiUrl('/api/tts'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: cleanText })
@@ -160,7 +162,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
             // Convert to proxy URLs
             const proxyUrls = data.urls.map((u: any) => ({
                 ...u,
-                url: `http://localhost:3000/api/proxy-audio?url=${encodeURIComponent(u.url)}`
+                url: `${getApiUrl('/api/proxy-audio')}?url=${encodeURIComponent(u.url)}`
             }));
             setAudioUrls(proxyUrls);
             setCurrentAudioIndex(0);
@@ -175,6 +177,45 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
   const handleAudioError = (e: any) => {
       console.error("Audio Load Error", e);
       setAudioError("Failed to load audio segment. Network error or format not supported.");
+  };
+
+  const convertScriptToMarkdown = (script: { speaker: string; text: string }[]): string => {
+      if (!script || script.length === 0) return '';
+      
+      const markdown = script.map((line) => {
+          return `## ${line.speaker}\n\n${line.text}`;
+      }).join('\n\n');
+      
+      return markdown;
+  };
+
+  const copyScriptAsMarkdown = async () => {
+      if (!selectedItem?.script) return;
+      
+      const markdown = convertScriptToMarkdown(selectedItem.script);
+      
+      try {
+          await navigator.clipboard.writeText(markdown);
+          setCopiedScript(true);
+          setTimeout(() => setCopiedScript(false), 2000);
+      } catch (error) {
+          console.error('Failed to copy:', error);
+          // Fallback for older browsers
+          const textArea = document.createElement('textarea');
+          textArea.value = markdown;
+          textArea.style.position = 'fixed';
+          textArea.style.opacity = '0';
+          document.body.appendChild(textArea);
+          textArea.select();
+          try {
+              document.execCommand('copy');
+              setCopiedScript(true);
+              setTimeout(() => setCopiedScript(false), 2000);
+          } catch (err) {
+              console.error('Fallback copy failed:', err);
+          }
+          document.body.removeChild(textArea);
+      }
   };
 
   const addRawInput = (type: string) => {
@@ -223,7 +264,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
         // Use the new API
         let response: Response;
         try {
-            response = await fetch('http://localhost:3000/api/analyze', {
+            response = await fetch(getApiUrl('/api/analyze'), {
                 method: 'POST',
                 body: formData,
             });
@@ -305,7 +346,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
         let errorMessage = "生成失败";
         
         if (error.message === 'NETWORK_ERROR') {
-            errorMessage = "生成失败，无法连接到后端服务\n\n请检查：\n1. 后端服务是否已启动 (npm run dev in server folder)\n2. 后端服务是否运行在 http://localhost:3000";
+            errorMessage = "生成失败，无法连接到后端服务\n\n请检查：\n1. 后端服务是否已启动\n2. 网络连接是否正常";
         } else if (error.message.startsWith('HTTP_ERROR|')) {
             const parts = error.message.split('|');
             const statusCode = parts[1];
@@ -1154,9 +1195,33 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                   {/* Full Script Section */}
                   {selectedItem.script && (
                       <div className="space-y-4">
-                          <div className="flex items-center gap-2 text-slate-400">
-                              <AlignLeft size={16} />
-                              <h3 className="text-xs font-bold uppercase tracking-wider">完整逐字稿</h3>
+                          <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2 text-slate-400">
+                                  <AlignLeft size={16} />
+                                  <h3 className="text-xs font-bold uppercase tracking-wider">完整逐字稿</h3>
+                              </div>
+                              <button
+                                  onClick={copyScriptAsMarkdown}
+                                  className={clsx(
+                                      "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+                                      copiedScript
+                                          ? "bg-green-50 text-green-600 border border-green-200"
+                                          : "bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200"
+                                  )}
+                                  title="复制整篇 Markdown"
+                              >
+                                  {copiedScript ? (
+                                      <>
+                                          <Check size={14} />
+                                          <span>已复制</span>
+                                      </>
+                                  ) : (
+                                      <>
+                                          <Copy size={14} />
+                                          <span>复制 Markdown</span>
+                                      </>
+                                  )}
+                              </button>
                           </div>
                           <div className="space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-100">
                               {selectedItem.script.map((line, i) => (

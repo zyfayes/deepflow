@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { floatTo16BitPCM, arrayBufferToBase64, base64ToArrayBuffer } from '../utils/audio-utils';
+import { WS_URL } from '../utils/api-config';
 
 export function useLiveSession(
     script: string, 
@@ -46,8 +47,7 @@ export function useLiveSession(
     };
 
     const connect = useCallback(() => {
-        // Use ws://localhost:3000 for local dev
-        const ws = new WebSocket('ws://localhost:3000');
+        const ws = new WebSocket(WS_URL);
         wsRef.current = ws;
 
         ws.onopen = () => {
