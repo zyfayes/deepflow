@@ -1,22 +1,68 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Headphones, ToggleLeft, ToggleRight } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
+import type { FlowPlaybackState } from './SupplyDepotApp';
 
 interface HeadsetDeviceProps {
   currentContext: 'deep_work' | 'casual';
   onToggleContext: () => void;
   isPlaying: boolean;
+  playbackState: FlowPlaybackState | null;
+  audioUrl: string | null;
 }
 
-export function HeadsetDevice({ currentContext, onToggleContext, isPlaying }: HeadsetDeviceProps) {
+export function HeadsetDevice({ currentContext, onToggleContext, isPlaying, playbackState, audioUrl }: HeadsetDeviceProps) {
   // Mock waveform data
   const [bars, setBars] = useState<number[]>(new Array(12).fill(10));
   const [audioText, setAudioText] = useState<{type: 'input' | 'output', text: string} | null>(null);
   const isDeep = currentContext === 'deep_work';
+  const audioRef = useRef<HTMLAudioElement>(null);
+  
+  // 同步音频播放（仅用于单条播放模式）
+  useEffect(() => {
+    if (audioRef.current && playbackState?.playbackMode === 'audio' && audioUrl) {
+      // 更新音频源
+      if (audioRef.current.src !== audioUrl) {
+        audioRef.current.src = audioUrl;
+      }
+      
+      // 同步播放状态
+      if (playbackState.isPlaying && audioRef.current.paused) {
+        audioRef.current.play().catch(err => {
+          console.error('Headset audio play failed:', err);
+        });
+      } else if (!playbackState.isPlaying && !audioRef.current.paused) {
+        audioRef.current.pause();
+      }
+      
+      // 同步播放进度（可选，避免双重播放时使用静音）
+      // audioRef.current.volume = 0; // 静音，避免双重播放
+    }
+  }, [audioUrl, playbackState?.playbackMode, playbackState?.isPlaying]);
+  
+  // 更新实时字幕显示
+  useEffect(() => {
+    if (playbackState?.currentText) {
+      // 根据播放模式确定文本类型
+      const textType = playbackState.playbackMode === 'live' 
+        ? (playbackState.currentText.includes('用户') || playbackState.currentText.includes('User') ? 'input' : 'output')
+        : 'output'; // 单条播放默认为输出
+      
+      setAudioText({
+        type: textType,
+        text: playbackState.currentText
+      });
+    } else if (!playbackState) {
+      setAudioText(null);
+    }
+  }, [playbackState?.currentText, playbackState?.playbackMode]);
 
   useEffect(() => {
-    if (isPlaying) {
+    // 使用 playbackState 的 isPlaying 或 fallback 到 isPlaying prop
+    const actuallyPlaying = playbackState?.isPlaying ?? isPlaying;
+    
+    if (actuallyPlaying) {
       const interval = setInterval(() => {
         setBars(prev => prev.map(() => Math.random() * 40 + 10));
       }, 100);
@@ -25,10 +71,15 @@ export function HeadsetDevice({ currentContext, onToggleContext, isPlaying }: He
         setBars(new Array(12).fill(10));
       };
     }
-  }, [isPlaying]);
+  }, [isPlaying, playbackState?.isPlaying]);
 
-  // Simulate audio conversation
+  // 模拟音频对话（仅在无 playbackState 时使用，作为 fallback）
   useEffect(() => {
+    // 如果有 playbackState，使用真实数据，不再使用模拟数据
+    if (playbackState) {
+      return;
+    }
+    
     if (isPlaying) {
        const texts = [
            { type: 'input', text: '...我觉得这个语法点很难...' },
@@ -55,10 +106,21 @@ export function HeadsetDevice({ currentContext, onToggleContext, isPlaying }: He
     } else {
         setAudioText(null);
     }
-  }, [isPlaying]);
+  }, [isPlaying, playbackState]);
 
   return (
     <div className="flex flex-col items-center justify-center h-full p-4 overflow-hidden">
+       {/* 隐藏的音频元素，用于同步播放（仅单条播放模式） */}
+       {playbackState?.playbackMode === 'audio' && audioUrl && (
+         <audio
+           ref={audioRef}
+           className="hidden"
+           src={audioUrl}
+           // volume={0} // 静音，避免双重播放（HTMLAudioElement 没有 volume 属性，使用 muted）
+           muted
+         />
+       )}
+       
        {/* Headset Visual - Further Reduced */}
        <div className="relative w-44 h-44 bg-neutral-900 rounded-[2rem] shadow-2xl flex items-center justify-center border-4 border-neutral-800 ring-1 ring-white/10 shrink-0 mb-6">
           <div className="absolute top-0 w-20 h-2 bg-neutral-800 rounded-b-xl" /> {/* Band */}

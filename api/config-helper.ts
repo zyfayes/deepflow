@@ -33,3 +33,21 @@ export function isDoubaoConfigured(): boolean {
   return !!(config.apiKey && config.secretKey && config.appId);
 }
 
+/**
+ * 获取 ListenHub (MarsWave) API 配置
+ * 优先级：LISTENHUB_API_KEY > MARSWAVE_API_KEY
+ */
+export function getListenHubConfig() {
+  return {
+    apiKey: process.env.LISTENHUB_API_KEY || process.env.MARSWAVE_API_KEY || '',
+    baseUrl: 'https://api.marswave.ai/openapi/v1'
+  };
+}
+
+/**
+ * 检查 ListenHub API 是否已配置
+ */
+export function isListenHubConfigured(): boolean {
+  return !!getListenHubConfig().apiKey;
+}
+

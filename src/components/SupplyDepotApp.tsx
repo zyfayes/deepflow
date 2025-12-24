@@ -1,9 +1,13 @@
-import { useState, useRef, type Dispatch, type SetStateAction, useEffect } from 'react';
-import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Coffee, Library, Tag, X, AlignLeft, Radio, MessageCircle, Plus, AlertCircle, Mic2, Square, Copy, Check, Trash2, Car, Home, Focus, Moon, RefreshCw } from 'lucide-react';
+import { useState, useRef, type Dispatch, type SetStateAction, useEffect, useMemo } from 'react';
+import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Library, Tag, X, AlignLeft, Radio, MessageCircle, Plus, AlertCircle, Mic2, Square, Copy, Check, Trash2, Car, Home, Focus, Moon, RefreshCw } from 'lucide-react';
 import clsx from 'clsx';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useLiveSession } from '../hooks/useLiveSession';
 import { PackingAnimation } from './PackingAnimation';
 import { getApiUrl } from '../utils/api-config';
+import { cacheManager } from '../utils/cache-manager';
+import { generateFileHash, generateScriptHash } from '../utils/file-utils';
+import Hls from 'hls.js';
 
 export interface KnowledgeCard {
     id: string;
@@ -49,6 +53,12 @@ interface FlowItem {
     generationProgress?: string;
 }
 
+export interface FlowPlaybackState {
+  isPlaying: boolean;
+  currentText: string;
+  playbackMode: 'audio' | 'live';
+}
+
 interface SupplyDepotAppProps {
   onStartFlow: () => void;
   onStopFlow: () => void;
@@ -57,9 +67,10 @@ interface SupplyDepotAppProps {
   onUpdateKnowledgeCards: Dispatch<SetStateAction<KnowledgeCard[]>>;
   currentContext: 'deep_work' | 'casual';
   onContextChange: (context: 'deep_work' | 'casual') => void;
+  onPlaybackStateChange?: (state: FlowPlaybackState) => void;
 }
 
-export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCards, onUpdateKnowledgeCards, currentContext, onContextChange }: SupplyDepotAppProps) {
+export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCards, onUpdateKnowledgeCards, onPlaybackStateChange }: SupplyDepotAppProps) {
   const [rawInputs, setRawInputs] = useState<RawInput[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -70,12 +81,14 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState<string>('');
   const [readyToFlow, setReadyToFlow] = useState(false);
-  const [gardenTab, setGardenTab] = useState<'cards' | 'files'>('cards');
+  const [gardenTab, setGardenTab] = useState<'cards' | 'files' | 'cache'>('cards');
+  const [cacheStats, setCacheStats] = useState<{ files: number; audio: number; metadata: number } | null>(null);
   const [selectedItem, setSelectedItem] = useState<FlowItem | null>(null);
   const [filterPreset, setFilterPreset] = useState('all');
   const [showInputPanel, setShowInputPanel] = useState(false);
   const [isGardenOpen, setIsGardenOpen] = useState(false);
   const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{ show: boolean; fileId: string | null; fileName: string | null }>({ show: false, fileId: null, fileName: null });
+  const hlsRef = useRef<Hls | null>(null);
   
   // 今日复盘相关状态
   const [hasTriggeredReview, setHasTriggeredReview] = useState(false);
@@ -462,13 +475,43 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
   const audioRef = useRef<HTMLAudioElement>(null);
   const [copiedScript, setCopiedScript] = useState(false);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  
+  // TTS 生成进度状态
+  const [ttsProgress, setTTSProgress] = useState<{
+    stage: string;
+    message: string;
+    percentage?: number;
+  } | null>(null);
+
+  // Fullscreen Flow Mode State
+  const [currentSceneTag, setCurrentSceneTag] = useState<SceneTag>('default');
+  const [currentPlayingItem, setCurrentPlayingItem] = useState<FlowItem | null>(null);
+  const [hasAutoPlayed, setHasAutoPlayed] = useState(false);
 
   // Live Session State
   const [isLiveMode, setIsLiveMode] = useState(false);
   const liveSession = useLiveSession(
       selectedItem?.script?.map(s => `${s.speaker}: ${s.text}`).join('\n') || '',
       selectedItem?.knowledgeCards || [],
-      () => console.log("Live Connected"),
+      () => {
+          console.log("Live Connected");
+          if (selectedItem) {
+              setFlowItems(prev => prev.map(item => {
+                  if (item.id === selectedItem.id) {
+                      return {
+                          ...item,
+                          playbackProgress: {
+                              ...item.playbackProgress,
+                              hasStarted: true,
+                              startedAt: item.playbackProgress?.startedAt || Date.now(),
+                              lastPlayedAt: Date.now()
+                          }
+                      };
+                  }
+                  return item;
+              }));
+          }
+      },
       () => {
           console.log("Live Disconnected");
           setIsLiveMode(false);
@@ -532,12 +575,78 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
   }, [playbackRate]);
 
   useEffect(() => {
-    if (audioUrl && audioRef.current) {
-      audioRef.current.play().catch(err => {
-        console.error('Play failed:', err);
-        setAudioError('播放失败，请重试');
-      });
+    // Cleanup previous HLS instance
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
     }
+
+    if (audioUrl && audioRef.current) {
+      const isHls = audioUrl.endsWith('.m3u8') || audioUrl.includes('m3u8');
+      
+      if (isHls && Hls.isSupported()) {
+        const hls = new Hls();
+        hlsRef.current = hls;
+        hls.loadSource(audioUrl);
+        hls.attachMedia(audioRef.current);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          audioRef.current?.play().catch(err => {
+             console.error('HLS Play failed:', err);
+             setAudioError('播放失败，请重试');
+          });
+        });
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+             if (data.fatal) {
+                 console.error('HLS Fatal Error:', data);
+                 setAudioError('播放出错');
+                 switch (data.type) {
+                case Hls.ErrorTypes.NETWORK_ERROR:
+                    hls.startLoad();
+                    break;
+                case Hls.ErrorTypes.MEDIA_ERROR:
+                    hls.recoverMediaError();
+                    break;
+                default:
+                    hls.destroy();
+                    break;
+                }
+             }
+        });
+      } else if (audioRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+        // Native HLS support (Safari)
+        audioRef.current.src = audioUrl;
+        audioRef.current.play().catch(err => {
+            console.error('Native HLS Play failed:', err);
+            setAudioError('播放失败: 无法播放此音频格式');
+        });
+      } else {
+        // Standard playback (MP3/WAV) - Fallback
+        // If it's an m3u8 file and we reached here, it means neither HLS.js nor Native HLS is supported
+        if (isHls) {
+            console.error('HLS playback not supported on this browser');
+            setAudioError('您的浏览器不支持 HLS 音频播放，请尝试使用 Chrome 或 Safari');
+            return;
+        }
+        
+        audioRef.current.src = audioUrl;
+        audioRef.current.play().catch(err => {
+            console.error('Play failed:', err);
+            // Handle specific NotSupportedError
+            if (err.name === 'NotSupportedError') {
+                setAudioError('播放失败: 浏览器不支持此音频格式');
+            } else {
+                setAudioError('播放失败，请重试');
+            }
+        });
+      }
+    }
+    
+    return () => {
+        if (hlsRef.current) {
+            hlsRef.current.destroy();
+            hlsRef.current = null;
+        }
+    };
   }, [audioUrl]);
 
   // 时间格式化函数
@@ -607,7 +716,115 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flowItems, hasTriggeredReview]);
 
+  // 获取可播放的音频项（排除 interactive 类型）
+  const getPlayableItems = (items: FlowItem[], sceneTag?: SceneTag): FlowItem[] => {
+    return items.filter(item => 
+      item.script && 
+      item.script.length > 0 && 
+      item.contentType !== 'interactive' &&
+      (!sceneTag || item.sceneTag === sceneTag || (!item.sceneTag && sceneTag === 'default'))
+    );
+  };
+
+  // 获取所有场景类型的数组 (Filter scenes that have content)
+  const sceneTagsArray = useMemo(() => {
+    const allTags: SceneTag[] = ['commute', 'home_charge', 'focus', 'sleep_meditation', 'qa_memory', 'daily_review', 'default'];
+    // Only include scenes that have playable items
+    return allTags.filter(tag => getPlayableItems(flowItems, tag).length > 0);
+  }, [flowItems]);
+
+  // Ensure we are on a valid scene (Validation Effect)
+  useEffect(() => {
+    if (isFlowing && sceneTagsArray.length > 0 && !sceneTagsArray.includes(currentSceneTag)) {
+       // If current scene is empty/invalid, switch to the first available one
+       const firstAvailable = sceneTagsArray[0];
+       setCurrentSceneTag(firstAvailable);
+       
+       // Also trigger audio change if needed
+       const playableItems = getPlayableItems(flowItems, firstAvailable);
+       if (playableItems.length > 0) {
+         const firstItem = playableItems[0];
+         if (audioRef.current) {
+            audioRef.current.pause();
+            setIsAudioPlaying(false);
+         }
+         setCurrentPlayingItem(firstItem);
+         setSelectedItem(firstItem);
+         handlePlayAudio(firstItem);
+       }
+    }
+  }, [isFlowing, sceneTagsArray, currentSceneTag, flowItems]);
+
+  // Calculate current subtitle
+  const currentSubtitle = useMemo(() => {
+    if (!currentPlayingItem?.subtitles) return '';
+    // Find the last subtitle that has time <= currentTime
+    const activeSubtitle = [...currentPlayingItem.subtitles].reverse().find(sub => {
+       const seconds = parseDurationToSeconds(sub.time);
+       return seconds <= currentTime;
+    });
+    return activeSubtitle?.text || '';
+  }, [currentPlayingItem, currentTime]);
+
+  // Sync playback state
+  useEffect(() => {
+     if (onPlaybackStateChange) {
+         onPlaybackStateChange({
+             isPlaying: isAudioPlaying,
+             currentText: currentSubtitle || currentPlayingItem?.title || 'Listening...',
+             playbackMode: isLiveMode ? 'live' : 'audio'
+         });
+     }
+  }, [isAudioPlaying, currentSubtitle, currentPlayingItem, isLiveMode, onPlaybackStateChange]);
+
+  // 自动播放逻辑：进入全屏心流页面时自动播放 (Enhanced)
+  useEffect(() => {
+    if (isFlowing && !hasAutoPlayed && sceneTagsArray.length > 0) {
+      // Use the first valid scene from our filtered list
+      const targetScene = sceneTagsArray[0];
+      
+      // If we are not on a valid scene, switch to it
+      if (currentSceneTag !== targetScene) {
+          setCurrentSceneTag(targetScene);
+      }
+
+      const playableItems = getPlayableItems(flowItems, targetScene);
+      if (playableItems.length > 0) {
+        const firstItem = playableItems[0];
+        // Only play if we are not already playing it
+        if (currentPlayingItem?.id !== firstItem.id) {
+            setCurrentPlayingItem(firstItem);
+            setSelectedItem(firstItem);
+            handlePlayAudio(firstItem);
+            setHasAutoPlayed(true);
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFlowing, hasAutoPlayed, sceneTagsArray]); // Removed flowItems dependency to avoid loops, rely on sceneTagsArray which depends on flowItems
+
+  // 退出全屏时重置状态
+  useEffect(() => {
+    if (!isFlowing) {
+      setHasAutoPlayed(false);
+      setCurrentSceneTag('default');
+      setCurrentPlayingItem(null);
+      if (audioRef.current) {
+        audioRef.current.pause();
+        setIsAudioPlaying(false);
+      }
+    }
+  }, [isFlowing]);
+
+  // 同步当前播放项状态
+  useEffect(() => {
+    if (selectedItem && selectedItem.status === 'playing') {
+      setCurrentPlayingItem(selectedItem);
+    }
+  }, [selectedItem]);
+
   const handlePlayAudio = async (item: FlowItem) => {
+    console.log('[PlayAudio] Starting for item:', item.id, item.contentType);
     if (!item.script) return;
     
     // 实时练习类 items 不应该调用 TTS API
@@ -615,6 +832,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
       console.warn('Interactive items should use live session, not TTS');
       return;
     }
+    
     setIsPlayingAudio(true);
     setAudioError(null);
     setAudioUrl(null);
@@ -622,6 +840,66 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
     setCurrentPartIndex(0);
     setCurrentTime(0);
     setDuration(0);
+    
+    // 检查音频缓存
+    try {
+      const scriptHash = await generateScriptHash(item.script);
+      const preset = item.contentType === 'output' ? 'quick_summary' : item.contentType === 'discussion' ? 'deep_analysis' : '';
+      
+      if (preset) {
+        const cachedAudioUrl = await cacheManager.getCachedAudioUrl(scriptHash, preset);
+        if (cachedAudioUrl) {
+          console.log('[Cache] 使用缓存的音频');
+          
+          // 模拟 TTS 生成流程的 loading（3-5 秒）
+          setTTSProgress({ stage: 'preparing', message: '准备生成音频...', percentage: 10 });
+          
+          await new Promise(resolve => setTimeout(resolve, 800));
+          setTTSProgress({ stage: 'calling-api', message: '调用 TTS API...', percentage: 30 });
+          
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          setTTSProgress({ stage: 'processing', message: '处理音频数据...', percentage: 60 });
+          
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          setTTSProgress({ stage: 'generating', message: '生成音频中...', percentage: 80 });
+          
+          await new Promise(resolve => setTimeout(resolve, 800));
+          setTTSProgress({ stage: 'completed', message: '完成', percentage: 100 });
+          
+          await new Promise(resolve => setTimeout(resolve, 400));
+          
+          // 延迟后设置音频
+          setTTSProgress(null);
+          setAudioUrl(cachedAudioUrl);
+          setAudioParts([cachedAudioUrl]);
+          setCurrentPartIndex(0);
+          setIsPlayingAudio(false);
+          
+          // 标记 item 为已开始播放
+          setFlowItems(prev => prev.map(flowItem => {
+            if (flowItem.id === item.id) {
+              return {
+                ...flowItem,
+                status: 'playing' as const,
+                playbackProgress: {
+                  ...flowItem.playbackProgress,
+                  hasStarted: true,
+                  startedAt: flowItem.playbackProgress?.startedAt || Date.now(),
+                  lastPlayedAt: Date.now()
+                }
+              };
+            }
+            return flowItem;
+          }));
+          return; // 直接使用缓存，跳过 API 调用
+        }
+      }
+    } catch (error) {
+      console.error('[Cache] 检查音频缓存失败:', error);
+      // 继续正常流程
+    }
+    
+    setTTSProgress({ stage: 'preparing', message: '准备生成音频...', percentage: 0 });
     
     // 标记 item 为已开始播放
     setFlowItems(prev => prev.map(flowItem => {
@@ -641,81 +919,149 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
     }));
 
     try {
-        // 判断使用哪种模式
-        const isQuickSummary = item.contentType === 'output';
-        const isDeepAnalysis = item.contentType === 'discussion';
-        
-        const requestBody: any = {
+      // 判断使用哪种模式
+      const isQuickSummary = item.contentType === 'output';
+      const isDeepAnalysis = item.contentType === 'discussion';
+      
+      // 1. 创建任务
+      const createResponse = await fetch(getApiUrl('/api/tts'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          script: item.script,
           preset: isQuickSummary ? 'quick_summary' : isDeepAnalysis ? 'deep_analysis' : undefined,
           contentType: item.contentType
-        };
+        })
+      });
+      
+      const createData = await createResponse.json();
+      
+      if (!createResponse.ok) {
+        throw new Error(createData.error || 'TTS 任务创建失败');
+      }
+      
+      const { taskId } = createData;
+      if (!taskId) {
+        throw new Error('未收到任务 ID');
+      }
+      
+      // 2. 轮询任务状态
+      const pollTaskStatus = async (): Promise<{ url?: string; urls?: string[]; duration?: number }> => {
+        const maxAttempts = 60; // 最多轮询 5 分钟（每 5 秒一次）
+        let attempts = 0;
         
-        if (isQuickSummary) {
-          const cleanText = item.script.map(s => `${s.speaker}: ${s.text}`).join('\n');
-          requestBody.text = cleanText;
-        } else if (isDeepAnalysis) {
-          requestBody.script = item.script;
-        } else {
-          const cleanText = item.script.map(s => `${s.speaker}: ${s.text}`).join('\n');
-          requestBody.text = cleanText;
-        }
-
-        const response = await fetch(getApiUrl('/api/tts'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody)
-        });
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'TTS request failed');
-        }
-        
-        if (data.url) {
-            let proxyUrl = data.url;
-            if (!data.url.startsWith('data:')) {
-                proxyUrl = `${getApiUrl('/api/proxy-audio')}?url=${encodeURIComponent(data.url)}`;
-            }
-            setAudioUrl(proxyUrl);
-            setAudioParts([proxyUrl]);
-            setCurrentPartIndex(0);
-            
-            // 如果API返回了duration，更新FlowItem
-            if (data.duration && item) {
-              const minutes = Math.floor(data.duration / 60);
-              const seconds = Math.floor(data.duration % 60);
-              const formattedDuration = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        return new Promise((resolve, reject) => {
+          const poll = async () => {
+            try {
+              const statusResponse = await fetch(`${getApiUrl('/api/tts')}?taskId=${taskId}`);
+              const status = await statusResponse.json();
               
-              setFlowItems(prev => prev.map(flowItem => {
-                if (flowItem.id === item.id && flowItem.duration !== formattedDuration) {
-                  return { ...flowItem, duration: formattedDuration };
+              // 更新进度显示
+              if (status.progress) {
+                setTTSProgress({
+                  stage: status.progress.stage || 'processing',
+                  message: status.progress.message || '处理中...',
+                  percentage: status.progress.percentage
+                });
+              }
+              
+              if (status.status === 'completed') {
+                setTTSProgress(null);
+                if (status.result) {
+                  resolve(status.result);
+                } else {
+                  reject(new Error('任务完成但未返回结果'));
                 }
-                return flowItem;
-              }));
+              } else if (status.status === 'failed') {
+                setTTSProgress(null);
+                reject(new Error(status.error || 'TTS 生成失败'));
+              } else if (attempts >= maxAttempts) {
+                setTTSProgress(null);
+                reject(new Error('TTS 生成超时，请稍后重试'));
+              } else {
+                attempts++;
+                setTimeout(poll, 5000); // 每 5 秒轮询一次，降低频率
+              }
+            } catch (error: any) {
+              setTTSProgress(null);
+              reject(error);
             }
-        } else if (data.urls && Array.isArray(data.urls)) {
-            const parts: string[] = (data.urls as Array<string | { url?: string }>)
-              .map((u) => (typeof u === 'string' ? u : u.url || ''))
-              .filter((u) => u.length > 0)
-              .map((u) => {
-                if (u.startsWith('data:')) return u;
-                return `${getApiUrl('/api/proxy-audio')}?url=${encodeURIComponent(u)}`;
-              });
-
-            if (parts.length === 0) {
-              throw new Error('No valid audio URLs returned');
-            }
-
-            setAudioParts(parts);
-            setCurrentPartIndex(0);
-            setAudioUrl(parts[0]);
-        } else {
-            throw new Error('Invalid API response format');
+          };
+          
+          poll();
+        });
+      };
+      
+      // 3. 等待任务完成并设置音频 URL
+      const result: { url?: string; urls?: string[]; duration?: number } = await pollTaskStatus();
+      
+      // 缓存音频
+      try {
+        const scriptHash = await generateScriptHash(item.script);
+        const preset = isQuickSummary ? 'quick_summary' : isDeepAnalysis ? 'deep_analysis' : '';
+        
+        if (preset && result.url) {
+          // 获取音频 Blob
+          const audioResponse = await fetch(result.url.startsWith('data:') ? result.url : `${getApiUrl('/api/proxy-audio')}?url=${encodeURIComponent(result.url)}`);
+          const audioBlob = await audioResponse.blob();
+          
+          await cacheManager.cacheAudio(scriptHash, preset, audioBlob, {
+            duration: result.duration,
+            contentType: audioBlob.type || 'audio/mpeg'
+          });
+          console.log('[Cache] 音频已缓存:', scriptHash, preset);
         }
-    } catch (error) {
-        console.error("TTS Error", error);
-        setIsPlayingAudio(false);
-        setAudioError("Failed to generate audio. Please try again.");
+      } catch (error) {
+        console.error('[Cache] 音频缓存失败:', error);
+        // 缓存失败不影响正常流程
+      }
+      
+      if (result.url) {
+        let proxyUrl = result.url;
+        if (!result.url.startsWith('data:')) {
+          proxyUrl = `${getApiUrl('/api/proxy-audio')}?url=${encodeURIComponent(result.url)}`;
+        }
+        setAudioUrl(proxyUrl);
+        setAudioParts([proxyUrl]);
+        setCurrentPartIndex(0);
+      } else if (result.urls && Array.isArray(result.urls)) {
+        const parts: string[] = result.urls
+          .map((u: string | { url?: string }) => (typeof u === 'string' ? u : u.url || ''))
+          .filter((u) => u.length > 0)
+          .map((u) => {
+            if (u.startsWith('data:')) return u;
+            return `${getApiUrl('/api/proxy-audio')}?url=${encodeURIComponent(u)}`;
+          });
+
+        if (parts.length === 0) {
+          throw new Error('No valid audio URLs returned');
+        }
+
+        setAudioParts(parts);
+        setCurrentPartIndex(0);
+        setAudioUrl(parts[0]);
+      } else {
+        throw new Error('Invalid API response format');
+      }
+      
+      // 如果API返回了duration，更新FlowItem
+      if (result.duration && item) {
+        const minutes = Math.floor(result.duration / 60);
+        const seconds = Math.floor(result.duration % 60);
+        const formattedDuration = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        
+        setFlowItems(prev => prev.map(flowItem => {
+          if (flowItem.id === item.id && flowItem.duration !== formattedDuration) {
+            return { ...flowItem, duration: formattedDuration };
+          }
+          return flowItem;
+        }));
+      }
+    } catch (error: any) {
+      console.error("TTS Error", error);
+      setIsPlayingAudio(false);
+      setTTSProgress(null);
+      setAudioError(error.message || "音频生成失败，请重试");
     }
   };
 
@@ -723,6 +1069,64 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
       console.error("Audio Load Error", e);
       setAudioError("Failed to load audio segment. Network error or format not supported.");
   };
+
+  const renderAudioPlayer = () => (
+      <audio
+          ref={audioRef}
+          className="hidden"
+          src={audioUrl || undefined}
+          onLoadedMetadata={() => {
+            if (audioRef.current) {
+              setDuration(audioRef.current.duration || 0);
+            }
+          }}
+          onTimeUpdate={() => {
+            if (audioRef.current) {
+              setCurrentTime(audioRef.current.currentTime || 0);
+            }
+          }}
+          onError={handleAudioError}
+          onPlay={() => setIsAudioPlaying(true)}
+          onPause={() => {
+            setIsAudioPlaying(false);
+            if (selectedItem) {
+              setFlowItems(prev => prev.map(item => {
+                if (item.id === selectedItem.id && item.status === 'playing') {
+                  return {
+                    ...item,
+                    status: 'ready' as const
+                  };
+                }
+                return item;
+              }));
+            }
+          }}
+          onEnded={() => {
+            setIsPlayingAudio(false);
+            setIsAudioPlaying(false);
+            if (audioParts.length > 0 && currentPartIndex < audioParts.length - 1) {
+              const nextIndex = currentPartIndex + 1;
+              const nextUrl = audioParts[nextIndex];
+              setCurrentPartIndex(nextIndex);
+              setAudioUrl(nextUrl);
+              setCurrentTime(0);
+              setDuration(0);
+              return;
+            }
+            if (selectedItem) {
+              setFlowItems(prev => prev.map(item => {
+                if (item.id === selectedItem.id) {
+                  return {
+                    ...item,
+                    status: 'completed' as const
+                  };
+                }
+                return item;
+              }));
+            }
+        }}
+      />
+  );
 
   const convertScriptToMarkdown = (script: { speaker: string; text: string }[]): string => {
       if (!script || script.length === 0) return '';
@@ -775,9 +1179,89 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
         const files = Array.from(e.target.files);
+        
+        // 检查缓存
+        for (const file of files) {
+          try {
+            const fileHash = await generateFileHash(file);
+            const isCached = await cacheManager.isFileCached(file);
+            
+            if (isCached) {
+              console.log('[Cache] 使用缓存的文件:', file.name);
+              
+              // 检查是否有对应的 FlowItem 缓存
+              const cachedFlowItem = cacheManager.getCachedFlowItem(fileHash, genPreset);
+              if (cachedFlowItem) {
+                console.log('[Cache] 使用缓存的 FlowItem');
+                
+                // 模拟生成流程的 loading（3-5 秒）
+                setIsGenerating(true);
+                setGenerationProgress('正在处理文件...');
+                
+                await new Promise(resolve => setTimeout(resolve, 800));
+                setGenerationProgress('正在上传文件...');
+                
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                setGenerationProgress('正在分析内容...');
+                
+                await new Promise(resolve => setTimeout(resolve, 800));
+                setGenerationProgress('正在生成内容...');
+                
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                setGenerationProgress('正在处理结果...');
+                
+                await new Promise(resolve => setTimeout(resolve, 400));
+                
+                // 延迟后显示结果
+                setIsGenerating(false);
+                setGenerationProgress('');
+                
+                // 直接使用缓存的 flowItem
+                setFlowItems(prev => {
+                  // 检查是否已存在（避免重复添加）
+                  const exists = prev.some(item => item.id === cachedFlowItem.id);
+                  if (exists) {
+                    return prev;
+                  }
+                  return [...prev, cachedFlowItem];
+                });
+                
+                // 如果有知识卡片，也更新
+                if (cachedFlowItem.knowledgeCards && cachedFlowItem.knowledgeCards.length > 0) {
+                  onUpdateKnowledgeCards(prev => {
+                    // 合并知识卡片，避免重复
+                    const existingIds = new Set(prev.map((card: KnowledgeCard) => card.id));
+                    const newCards = cachedFlowItem.knowledgeCards!.filter((card: KnowledgeCard) => !existingIds.has(card.id));
+                    return [...prev, ...newCards];
+                  });
+                }
+                
+                // 添加视觉反馈（标记为从缓存加载）
+                const newInput = {
+                  id: Math.random().toString(36).slice(2, 11),
+                  type: currentInputType,
+                  name: file.name + ' (已缓存)',
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  timestamp: Date.now()
+                };
+                setRawInputs(prev => [...prev, newInput]);
+                setSelectedFiles(prev => [...prev, file]);
+                continue; // 跳过正常上传流程
+              }
+            }
+            
+            // 缓存新文件
+            await cacheManager.cacheFile(file);
+          } catch (error) {
+            console.error('[Cache] 文件缓存处理失败:', error);
+            // 继续正常流程
+          }
+        }
+        
+        // 继续正常流程（未缓存或缓存未命中）
         setSelectedFiles(prev => [...prev, ...files]);
         
         // Add visual feedback
@@ -1181,6 +1665,20 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
             }
         };
 
+        // 缓存 FlowItem（包含 script、knowledgeCards、tldr 等所有字段）
+        try {
+          if (selectedFiles.length > 0) {
+            const firstFile = selectedFiles[0];
+            const fileHash = await generateFileHash(firstFile);
+            const preset = generationPreferences?.preset || genPreset;
+            cacheManager.cacheFlowItem(fileHash, preset, aiFlowItem);
+            console.log('[Cache] FlowItem 已缓存:', fileHash, preset);
+          }
+        } catch (error) {
+          console.error('[Cache] FlowItem 缓存失败:', error);
+          // 缓存失败不影响正常流程
+        }
+
         // 检查是否为首次生成 (当列表为空时，视为从 0 到 1 的生成)
         let newFlowItems: FlowItem[] = [aiFlowItem];
         
@@ -1394,55 +1892,186 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
     );
   };
 
-  if (isFlowing) {
+  // 获取当前场景的索引
+  const currentSceneIndex = sceneTagsArray.indexOf(currentSceneTag);
+  
+  // 场景切换函数
+  const handleSceneChange = (direction: 'next' | 'prev') => {
+    const newIndex = direction === 'next' 
+      ? (currentSceneIndex + 1) % sceneTagsArray.length
+      : (currentSceneIndex - 1 + sceneTagsArray.length) % sceneTagsArray.length;
+    const newSceneTag = sceneTagsArray[newIndex];
+    setCurrentSceneTag(newSceneTag);
+    // 场景切换时立即查找并播放对应场景的音频
+    const playableItems = getPlayableItems(flowItems, newSceneTag);
+    if (playableItems.length > 0) {
+      const firstItem = playableItems[0];
+      // 停止当前播放
+      if (audioRef.current) {
+        audioRef.current.pause();
+        setIsAudioPlaying(false);
+      }
+      setCurrentPlayingItem(firstItem);
+      setSelectedItem(firstItem);
+      handlePlayAudio(firstItem);
+    } else {
+      setCurrentPlayingItem(null);
+      setSelectedItem(null);
+      if (audioRef.current) {
+        audioRef.current.pause();
+        setIsAudioPlaying(false);
+      }
+    }
+  };
+
+  // 拨轮场景切换组件 (Revised for Horizontal Layout)
+  const SceneWheel = () => {
+    // Show even if only 1 scene, but hide arrows
+    if (sceneTagsArray.length === 0) return null;
+
+    const isSingleScene = sceneTagsArray.length <= 1;
+
+    const prevIndex = (currentSceneIndex - 1 + sceneTagsArray.length) % sceneTagsArray.length;
+    const nextIndex = (currentSceneIndex + 1) % sceneTagsArray.length;
+    
+    // Safety check for empty array handled above, but indices need care if length is 1
+    const prevScene = sceneTagsArray.length > 0 ? SCENE_CONFIGS[sceneTagsArray[prevIndex]] : SCENE_CONFIGS['default'];
+    const currentScene = SCENE_CONFIGS[currentSceneTag];
+    const nextScene = sceneTagsArray.length > 0 ? SCENE_CONFIGS[sceneTagsArray[nextIndex]] : SCENE_CONFIGS['default'];
+
     return (
-      <div className="h-full flex flex-col items-center justify-center bg-black text-white p-6 relative overflow-hidden">
+      <div className="flex flex-col items-center gap-8 mb-8 w-full">
+        {/* Horizontal Scene Switcher */}
+        <div className="flex items-center justify-center gap-4 w-full px-2">
+          {/* Previous Scene (Left) - Only show if multiple scenes */}
+          {!isSingleScene && (
+            <motion.div
+                initial={{ opacity: 0.3, scale: 0.8, x: 20 }}
+                animate={{ opacity: 0.4, scale: 0.85, x: 0 }}
+                className="flex flex-col items-center gap-2 cursor-pointer z-0 active:scale-95 transition-transform"
+                onClick={() => handleSceneChange('prev')}
+            >
+                <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-colors">
+                <prevScene.icon size={20} className="text-white/40" />
+                </div>
+                <span className="text-[10px] text-white/30 font-medium">{prevScene.label}</span>
+            </motion.div>
+          )}
+
+          {/* Current Scene (Center) */}
+          <motion.div
+            initial={{ scale: 0.9 }}
+            animate={{ scale: 1 }}
+            className="flex flex-col items-center gap-3 z-10 mx-2"
+          >
+            <motion.div
+              className="w-24 h-24 rounded-full bg-gradient-to-br from-indigo-500/30 to-purple-500/30 border-2 border-white/20 flex items-center justify-center shadow-lg shadow-indigo-500/20"
+              whileHover={{ scale: 1.05 }}
+            >
+              <currentScene.icon size={36} className="text-white" />
+            </motion.div>
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-sm font-bold text-white">{currentScene.label}</span>
+              <span className="text-[10px] text-white/50">{currentScene.description}</span>
+            </div>
+          </motion.div>
+
+          {/* Next Scene (Right) - Only show if multiple scenes */}
+          {!isSingleScene && (
+            <motion.div
+                initial={{ opacity: 0.3, scale: 0.8, x: -20 }}
+                animate={{ opacity: 0.4, scale: 0.85, x: 0 }}
+                className="flex flex-col items-center gap-2 cursor-pointer z-0 active:scale-95 transition-transform"
+                onClick={() => handleSceneChange('next')}
+            >
+                <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-colors">
+                <nextScene.icon size={20} className="text-white/40" />
+                </div>
+                <span className="text-[10px] text-white/30 font-medium">{nextScene.label}</span>
+            </motion.div>
+          )}
+        </div>
+
+        {/* Scene Indicators - Only show if multiple scenes */}
+        {!isSingleScene && (
+            <div className="flex gap-1.5">
+            {sceneTagsArray.map((tag, index) => (
+                <div
+                key={tag}
+                className={clsx(
+                    "w-1.5 h-1.5 rounded-full transition-all",
+                    index === currentSceneIndex ? "bg-white w-6" : "bg-white/30"
+                )}
+                />
+            ))}
+            </div>
+        )}
+      </div>
+    );
+  };
+
+  if (isFlowing) {
+    const playableItemsForCurrentScene = getPlayableItems(flowItems, currentSceneTag);
+    const hasNoAudioForScene = playableItemsForCurrentScene.length === 0;
+
+    return (
+      <div className="h-full flex flex-col items-center justify-between bg-black text-white p-6 relative overflow-hidden">
+        {renderAudioPlayer()}
         <div className="absolute inset-0 bg-gradient-to-br from-indigo-900 via-black to-black opacity-80" />
-        <div className="relative z-10 flex flex-col items-center text-center">
-            <div className="w-24 h-24 rounded-full bg-indigo-500/20 flex items-center justify-center mb-8 animate-pulse">
-                <Brain className="w-12 h-12 text-indigo-400" />
+        
+        {/* Top Spacer to balance layout */}
+        <div className="flex-1 min-h-[10%]" />
+
+        {/* Middle Section: Logo, Playing Info & Scene Switcher */}
+        <div className="relative z-10 flex flex-col items-center justify-center w-full max-w-md shrink-0">
+            {/* Logo */}
+            <div className="flex flex-col items-center mb-6">
+                <div className="w-16 h-16 rounded-full bg-indigo-500/20 flex items-center justify-center mb-3 ring-1 ring-indigo-500/30">
+                    <Brain className="w-8 h-8 text-indigo-400" />
+                </div>
+                <h2 className="text-xl font-light tracking-tight mb-1">DeepFlow</h2>
             </div>
-            <h2 className="text-3xl font-light tracking-tight mb-2">DeepFlow</h2>
-            <p className="text-white/50 text-sm mb-12">心流会话进行中...</p>
+
+            {/* Now Playing Title - Compact & Near Wheel */}
+            <div className="w-full px-4 mb-8 min-h-[3rem] flex items-center justify-center">
+                 <AnimatePresence mode="wait">
+                    {currentPlayingItem ? (
+                        <motion.div
+                            key={currentPlayingItem.id}
+                            initial={{ opacity: 0, y: 5 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -5 }}
+                            className="text-center"
+                        >
+                            <h3 className="text-lg font-semibold text-white/90 line-clamp-2 leading-snug drop-shadow-md">
+                                {currentPlayingItem.title}
+                            </h3>
+                        </motion.div>
+                    ) : (
+                        <motion.div
+                            key="empty"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className="text-sm text-white/30"
+                        >
+                            {hasNoAudioForScene ? "当前场景暂无内容" : "准备播放..."}
+                        </motion.div>
+                    )}
+                 </AnimatePresence>
+            </div>
             
-            <div className="flex gap-4 mb-12">
-               <div className="flex flex-col items-center gap-2">
-                  <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center">
-                    <span className="text-lg font-mono">24</span>
-                  </div>
-                  <span className="text-xs text-white/30">MIN</span>
-               </div>
-            </div>
+            <SceneWheel />
+        </div>
 
-            {/* Context Switcher in Flow Mode */}
-            <div className="flex gap-3 mb-12 bg-white/5 p-1 rounded-full border border-white/10">
-                <button 
-                    onClick={() => onContextChange('deep_work')}
-                    className={clsx(
-                        "flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-medium transition-all duration-300",
-                        currentContext === 'deep_work' 
-                            ? "bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.2)] scale-105" 
-                            : "text-white/40 hover:text-white/70 hover:bg-white/5"
-                    )}
-                >
-                    <Brain size={14} /> 深度
-                </button>
-                <button 
-                    onClick={() => onContextChange('casual')}
-                    className={clsx(
-                        "flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-medium transition-all duration-300",
-                        currentContext === 'casual' 
-                            ? "bg-green-500 text-white shadow-[0_0_20px_rgba(34,197,94,0.4)] scale-105" 
-                            : "text-white/40 hover:text-white/70 hover:bg-white/5"
-                    )}
-                >
-                    <Coffee size={14} /> 休闲
-                </button>
-            </div>
-
+        {/* Bottom Section: End Button */}
+        <div className="relative z-10 w-full max-w-md flex flex-col justify-end items-center flex-1 pb-8 min-h-[20%]">
             <button 
-                onClick={onStopFlow}
-                className="px-8 py-3 rounded-full bg-white/10 border border-white/20 text-white/80 text-sm font-medium hover:bg-white/20 transition-colors"
+                onClick={() => {
+                  setHasAutoPlayed(false);
+                  setCurrentPlayingItem(null);
+                  onStopFlow();
+                }}
+                className="px-8 py-3 rounded-full bg-white/10 border border-white/20 text-white/80 text-sm font-medium hover:bg-white/20 transition-colors backdrop-blur-md"
             >
                 结束会话
             </button>
@@ -1527,6 +2156,19 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                 >
                   原始文件库
                 </button>
+                <button
+                  onClick={async () => {
+                    setGardenTab('cache');
+                    const stats = await cacheManager.getCacheSize();
+                    setCacheStats(stats);
+                  }}
+                  className={clsx(
+                    "flex-1 py-1.5 text-xs font-bold rounded-lg transition-all",
+                    gardenTab === 'cache' ? "bg-white text-slate-800 shadow-sm" : "text-slate-400"
+                  )}
+                >
+                  缓存管理
+                </button>
               </div>
             </div>
 
@@ -1558,6 +2200,71 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                     </div>
                   ))
                 )
+              ) : gardenTab === 'cache' ? (
+                <div className="space-y-4">
+                  <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
+                    <h3 className="font-bold text-slate-800 text-sm mb-3">缓存统计</h3>
+                    {cacheStats ? (
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-slate-600">已缓存文件</span>
+                          <span className="text-sm font-semibold text-slate-800">{cacheStats.files}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-slate-600">已缓存音频</span>
+                          <span className="text-sm font-semibold text-slate-800">{cacheStats.audio}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-slate-600">已缓存 FlowItem</span>
+                          <span className="text-sm font-semibold text-slate-800">{cacheStats.metadata}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-400">加载中...</p>
+                    )}
+                  </div>
+                  
+                  <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 space-y-3">
+                    <h3 className="font-bold text-slate-800 text-sm">缓存操作</h3>
+                    <button
+                      onClick={async () => {
+                        await cacheManager.clearExpiredCache();
+                        const stats = await cacheManager.getCacheSize();
+                        setCacheStats(stats);
+                      }}
+                      className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 text-xs font-medium hover:bg-slate-200 transition-colors"
+                    >
+                      清理过期缓存
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (confirm('确定要清理所有缓存吗？此操作无法撤销。')) {
+                          await cacheManager.clearAllCache();
+                          const stats = await cacheManager.getCacheSize();
+                          setCacheStats(stats);
+                        }
+                      }}
+                      className="w-full py-2.5 rounded-xl bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 transition-colors"
+                    >
+                      清理所有缓存
+                    </button>
+                    <button
+                      onClick={async () => {
+                        const stats = await cacheManager.getCacheSize();
+                        setCacheStats(stats);
+                      }}
+                      className="w-full py-2.5 rounded-xl bg-indigo-50 text-indigo-600 text-xs font-medium hover:bg-indigo-100 transition-colors"
+                    >
+                      刷新统计
+                    </button>
+                  </div>
+                  
+                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      缓存功能可以避免重复上传和生成，提升使用体验。缓存数据存储在浏览器本地，不会上传到服务器。
+                    </p>
+                  </div>
+                </div>
               ) : (
                 archivedInputs.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-64 text-slate-400 space-y-4">
@@ -1960,61 +2667,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                               ) : (
                                   audioUrl ? (
                               <div className="w-full flex flex-col">
-                                  <audio
-                                      ref={audioRef}
-                                      className="hidden"
-                                      src={audioUrl}
-                                      onLoadedMetadata={() => {
-                                        if (audioRef.current) {
-                                          setDuration(audioRef.current.duration || 0);
-                                        }
-                                      }}
-                                      onTimeUpdate={() => {
-                                        if (audioRef.current) {
-                                          setCurrentTime(audioRef.current.currentTime || 0);
-                                        }
-                                      }}
-                                      onError={handleAudioError}
-                                      onPlay={() => setIsAudioPlaying(true)}
-                                      onPause={() => {
-                                        setIsAudioPlaying(false);
-                                        if (selectedItem) {
-                                          setFlowItems(prev => prev.map(item => {
-                                            if (item.id === selectedItem.id && item.status === 'playing') {
-                                              return {
-                                                ...item,
-                                                status: 'ready' as const
-                                              };
-                                            }
-                                            return item;
-                                          }));
-                                        }
-                                      }}
-                                      onEnded={() => {
-                                        setIsPlayingAudio(false);
-                                        setIsAudioPlaying(false);
-                                        if (audioParts.length > 0 && currentPartIndex < audioParts.length - 1) {
-                                          const nextIndex = currentPartIndex + 1;
-                                          const nextUrl = audioParts[nextIndex];
-                                          setCurrentPartIndex(nextIndex);
-                                          setAudioUrl(nextUrl);
-                                          setCurrentTime(0);
-                                          setDuration(0);
-                                          return;
-                                        }
-                                        if (selectedItem) {
-                                          setFlowItems(prev => prev.map(item => {
-                                            if (item.id === selectedItem.id) {
-                                              return {
-                                                ...item,
-                                                status: 'completed' as const
-                                              };
-                                            }
-                                            return item;
-                                          }));
-                                        }
-                                    }}
-                                  />
+                                  {renderAudioPlayer()}
                                   
                                   {/* Progress Bar */}
                                   <div className="w-full mb-4">
@@ -2149,6 +2802,24 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                               </button>
                           )
                               )
+                          )}
+
+                          {/* TTS 生成进度显示 */}
+                          {ttsProgress && (
+                              <div className="mt-4 w-full">
+                                  <div className="flex items-center gap-2 mb-2">
+                                      <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
+                                      <span className="text-sm text-slate-600 font-medium">{ttsProgress.message}</span>
+                                  </div>
+                                  {ttsProgress.percentage !== undefined && (
+                                      <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                                          <div 
+                                              className="bg-indigo-600 h-2 rounded-full transition-all duration-300 ease-out"
+                                              style={{ width: `${ttsProgress.percentage}%` }}
+                                          />
+                                      </div>
+                                  )}
+                              </div>
                           )}
 
                           {audioError && (

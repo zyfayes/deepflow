@@ -99,46 +99,79 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', message: 'DeepFlow Server is running' });
 });
 
-// TTS Endpoint - 使用 Google TTS
+// TTS Endpoint - 支持异步任务模式和 ListenHub API
 app.post('/api/tts', async (req, res): Promise<any> => {
-    const { text, script, preset, contentType } = req.body;
+    // 设置较长的超时时间（5 分钟）
+    req.setTimeout(300000);
+    res.setTimeout(300000);
 
-    const isQuickSummary = preset === 'quick_summary' || contentType === 'output';
-    const isDeepAnalysis = preset === 'deep_analysis' || contentType === 'discussion';
+    const { script, preset, contentType } = req.body;
+
+    // 验证输入
+    if (!script || !Array.isArray(script) || script.length === 0) {
+        return res.status(400).json({ error: "Script is required and must be a non-empty array" });
+    }
+
+    // 验证 script 格式
+    const isValidScript = script.every((item: any) => 
+        item && typeof item.speaker === 'string' && typeof item.text === 'string'
+    );
+    if (!isValidScript) {
+        return res.status(400).json({ error: "Invalid script format. Each item must have 'speaker' and 'text' fields" });
+    }
 
     try {
-        let finalText: string | undefined = undefined;
+        // 导入任务管理（使用动态导入避免在 Vercel 环境中的问题）
+        const { generateTaskId, createTask } = await import('../api/tts-task-manager.js');
+        const { processTTSAsync } = await import('../api/tts-processor.js');
 
-        if (isDeepAnalysis && Array.isArray(script) && script.length > 0) {
-            finalText = script.map((line: any) => {
-                const speaker = typeof line.speaker === 'string' ? line.speaker : '';
-                const content = typeof line.text === 'string' ? line.text : '';
-                return speaker ? `${speaker}: ${content}` : content;
-            }).join('\n');
-        } else if (typeof text === 'string' && text.trim().length > 0) {
-            finalText = text;
-        } else if (Array.isArray(script) && script.length > 0) {
-            finalText = script.map((line: any) => {
-                const speaker = typeof line.speaker === 'string' ? line.speaker : '';
-                const content = typeof line.text === 'string' ? line.text : '';
-                return speaker ? `${speaker}: ${content}` : content;
-            }).join('\n');
-        }
+        // 创建任务
+        const taskId = generateTaskId();
+        createTask(taskId);
 
-        if (!finalText || finalText.trim().length === 0) {
-            return res.status(400).json({ error: "Text or script is required" });
-        }
-
-        const urls = googleTTS.getAllAudioUrls(finalText, {
-            lang: 'zh-CN',
-            slow: false,
-            host: 'https://translate.google.com',
+        // 异步处理（不等待完成）
+        processTTSAsync(taskId, script, preset || '', contentType || '').catch((err) => {
+            console.error(`Task ${taskId} processing error:`, err);
         });
 
-        res.json({ urls });
+        // 立即返回任务 ID
+        return res.json({
+            taskId,
+            status: 'pending',
+            message: 'Task created, use GET /api/tts?taskId=' + taskId + ' to check status'
+        });
     } catch (error: any) {
-        console.error("TTS Error:", error);
-        res.status(500).json({ error: error.message || "TTS failed" });
+        console.error("TTS Task Creation Error:", error);
+        return res.status(500).json({ error: error.message || "Failed to create TTS task" });
+    }
+});
+
+// TTS 任务状态查询端点
+app.get('/api/tts', async (req, res): Promise<any> => {
+    const { taskId } = req.query;
+    
+    if (!taskId || typeof taskId !== 'string') {
+        return res.status(400).json({ error: 'taskId is required' });
+    }
+
+    try {
+        const { getTask } = await import('../api/tts-task-manager.js');
+        const task = getTask(taskId);
+        
+        if (!task) {
+            return res.status(404).json({ error: 'Task not found' });
+        }
+
+        return res.json({
+            taskId: task.taskId,
+            status: task.status,
+            progress: task.progress,
+            result: task.result,
+            error: task.error
+        });
+    } catch (error: any) {
+        console.error("TTS Task Query Error:", error);
+        return res.status(500).json({ error: error.message || "Failed to query TTS task" });
     }
 });
 

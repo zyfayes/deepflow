@@ -1,66 +1,97 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import * as googleTTS from 'google-tts-api';
-import { getDoubaoConfig, isDoubaoConfigured } from './config-helper.js';
+import {
+  generateTaskId,
+  createTask,
+  getTask,
+  type TTSTask
+} from './tts-task-manager.js';
+import { processTTSAsync } from './tts-processor.js';
 
-// 注意：Vercel serverless functions 不支持直接导入 server/ 目录下的模块
-// 如果需要使用豆包API，需要将调用逻辑内联或使用其他方式
-// 这里暂时保持Google TTS作为fallback，实际部署时可以考虑使用edge functions或外部服务
-
+/**
+ * TTS API 端点
+ * 支持异步任务模式，避免 Vercel 60 秒超时限制
+ */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+  // 处理 CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
   }
 
-  // Parse body - Vercel may not auto-parse JSON
-  let body = req.body;
-  if (typeof body === 'string') {
+  // GET: 查询任务状态
+  if (req.method === 'GET') {
+    const { taskId } = req.query;
+    
+    if (!taskId || typeof taskId !== 'string') {
+      return res.status(400).json({ error: 'taskId is required' });
+    }
+
+    const task = getTask(taskId);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    return res.json({
+      taskId: task.taskId,
+      status: task.status,
+      progress: task.progress,
+      result: task.result,
+      error: task.error
+    });
+  }
+
+  // POST: 创建任务
+  if (req.method === 'POST') {
+    // Parse body - Vercel may not auto-parse JSON
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid JSON body" });
+      }
+    }
+
+    const { script, preset, contentType } = body || {};
+
+    // 验证输入
+    if (!script || !Array.isArray(script) || script.length === 0) {
+      return res.status(400).json({ error: "Script is required and must be a non-empty array" });
+    }
+
+    // 验证 script 格式
+    const isValidScript = script.every((item: any) => 
+      item && typeof item.speaker === 'string' && typeof item.text === 'string'
+    );
+    if (!isValidScript) {
+      return res.status(400).json({ error: "Invalid script format. Each item must have 'speaker' and 'text' fields" });
+    }
+
     try {
-      body = JSON.parse(body);
-    } catch (e) {
-      return res.status(400).json({ error: "Invalid JSON body" });
+      // 创建任务
+      const taskId = generateTaskId();
+      createTask(taskId);
+
+      // 异步处理（不等待完成）
+      processTTSAsync(taskId, script, preset || '', contentType || '').catch((err) => {
+        console.error(`Task ${taskId} processing error:`, err);
+      });
+
+      // 立即返回任务 ID
+      return res.json({
+        taskId,
+        status: 'pending',
+        message: 'Task created, use GET /api/tts?taskId=' + taskId + ' to check status'
+      });
+    } catch (error: any) {
+      console.error("TTS Task Creation Error:", error);
+      return res.status(500).json({ error: error.message || "Failed to create TTS task" });
     }
   }
 
-  const { text, script, preset, contentType } = body || {};
-  
-  // 判断使用哪个API
-  const isQuickSummary = preset === 'quick_summary' || contentType === 'output';
-  const isDeepAnalysis = preset === 'deep_analysis' || contentType === 'discussion';
-  const useDoubao = isDoubaoConfigured() && (isQuickSummary || isDeepAnalysis);
-  
-  try {
-    if (useDoubao) {
-      // TODO: 在Vercel环境中实现豆包API调用
-      // 由于Vercel serverless functions的限制，可能需要：
-      // 1. 使用edge functions
-      // 2. 调用外部API服务
-      // 3. 或使用Vercel的serverless function调用本地server
-      
-      // 临时fallback到Google TTS
-      if (!text) {
-        return res.status(400).json({ error: "Text is required" });
-      }
-      const urls = googleTTS.getAllAudioUrls(text, {
-        lang: 'zh-CN',
-        slow: false,
-        host: 'https://translate.google.com',
-      });
-      res.json({ urls });
-    } else {
-      // 向后兼容：使用Google TTS（多片段）
-      if (!text) {
-        return res.status(400).json({ error: "Text is required" });
-      }
-      const urls = googleTTS.getAllAudioUrls(text, {
-        lang: 'zh-CN',
-        slow: false,
-        host: 'https://translate.google.com',
-      });
-      res.json({ urls });
-    }
-  } catch (error: any) {
-    console.error("TTS Error:", error);
-    res.status(500).json({ error: error.message || "TTS failed" });
-  }
+  return res.status(405).json({ error: 'Method not allowed' });
 }
 
