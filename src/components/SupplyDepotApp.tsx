@@ -1,5 +1,5 @@
 import { useState, useRef, type Dispatch, type SetStateAction, useEffect, useMemo } from 'react';
-import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Library, Tag, X, AlignLeft, Radio, MessageCircle, Plus, AlertCircle, Mic2, Square, Copy, Check, Trash2, Car, Home, Focus, Moon, RefreshCw } from 'lucide-react';
+import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Library, Tag, X, AlignLeft, Plus, AlertCircle, Mic2, Square, Copy, Check, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLiveSession } from '../hooks/useLiveSession';
@@ -8,6 +8,8 @@ import { getApiUrl } from '../utils/api-config';
 import { cacheManager } from '../utils/cache-manager';
 import { generateFileHash, generateScriptHash } from '../utils/file-utils';
 import Hls from 'hls.js';
+import { type SceneTag, SCENE_CONFIGS } from '../config/scene-config';
+import { SceneWheel } from './SceneWheel';
 
 export interface KnowledgeCard {
     id: string;
@@ -24,8 +26,6 @@ interface RawInput {
     time: string;
     timestamp: number;
 }
-
-type SceneTag = 'commute' | 'home_charge' | 'focus' | 'sleep_meditation' | 'qa_memory' | 'daily_review' | 'default';
 
 export interface FlowItem {
     id: string;
@@ -57,6 +57,10 @@ export interface FlowPlaybackState {
   isPlaying: boolean;
   currentText: string;
   playbackMode: 'audio' | 'live';
+  currentTime?: number; // 当前播放时间（秒）
+  duration?: number; // 音频总时长（秒）
+  subtitleStartTime?: number; // 当前字幕的开始时间（秒）
+  subtitleEndTime?: number; // 当前字幕的结束时间（秒）
 }
 
 interface SupplyDepotAppProps {
@@ -65,12 +69,23 @@ interface SupplyDepotAppProps {
   isFlowing: boolean;
   knowledgeCards: KnowledgeCard[];
   onUpdateKnowledgeCards: Dispatch<SetStateAction<KnowledgeCard[]>>;
-  currentContext: 'deep_work' | 'casual';
-  onContextChange: (context: 'deep_work' | 'casual') => void;
+  currentSceneTag: SceneTag;
+  onSceneChange: (tag: SceneTag) => void;
+  onAvailableScenesChange: (scenes: SceneTag[]) => void;
   onPlaybackStateChange?: (state: FlowPlaybackState) => void;
 }
 
-export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCards, onUpdateKnowledgeCards, onPlaybackStateChange }: SupplyDepotAppProps) {
+export function SupplyDepotApp({ 
+  onStartFlow, 
+  onStopFlow, 
+  isFlowing, 
+  knowledgeCards, 
+  onUpdateKnowledgeCards, 
+  currentSceneTag,
+  onSceneChange,
+  onAvailableScenesChange,
+  onPlaybackStateChange 
+}: SupplyDepotAppProps) {
   const [rawInputs, setRawInputs] = useState<RawInput[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -119,51 +134,8 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
       interactive_practice: { label: '提问练习', duration: 'medium', mode: 'dual', type: 'interactive' }
   };
 
-  // 场景标签体系定义
-  const SCENE_CONFIGS: Record<SceneTag, { tag: SceneTag; label: string; icon: any; description: string }> = {
-    commute: {
-      tag: 'commute',
-      label: '回家路上',
-      icon: Car,
-      description: '通勤、步行或驾驶途中'
-    },
-    home_charge: {
-      tag: 'home_charge',
-      label: '在家充电',
-      icon: Home,
-      description: '居家恢复'
-    },
-    focus: {
-      tag: 'focus',
-      label: '静坐专注',
-      icon: Focus,
-      description: '专注学习'
-    },
-    sleep_meditation: {
-      tag: 'sleep_meditation',
-      label: '睡前冥想',
-      icon: Moon,
-      description: '睡前放松'
-    },
-    qa_memory: {
-      tag: 'qa_memory',
-      label: '问答式记忆',
-      icon: MessageCircle,
-      description: '记忆强化'
-    },
-    daily_review: {
-      tag: 'daily_review',
-      label: '今日复盘',
-      icon: RefreshCw,
-      description: '今日学习复盘'
-    },
-    default: {
-      tag: 'default',
-      label: '默认',
-      icon: Radio,
-      description: '通用场景'
-    }
-  };
+  // 场景标签体系定义 (Moved to config/scene-config.tsx)
+
 
   // 场景标签映射函数
   const getSceneTagFromTitle = (title: string, contentCategory?: string, sceneTag?: SceneTag, summary?: string): SceneTag => {
@@ -481,7 +453,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
   } | null>(null);
 
   // Fullscreen Flow Mode State
-  const [currentSceneTag, setCurrentSceneTag] = useState<SceneTag>('default');
+
   const [currentPlayingItem, setCurrentPlayingItem] = useState<FlowItem | null>(null);
   const [hasAutoPlayed, setHasAutoPlayed] = useState(false);
 
@@ -756,27 +728,19 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
     return allTags.filter(tag => getPlayableItems(flowItems, tag).length > 0);
   }, [flowItems]);
 
+  // Sync available scenes to parent
+  useEffect(() => {
+    onAvailableScenesChange(sceneTagsArray);
+  }, [sceneTagsArray, onAvailableScenesChange]);
+
   // Ensure we are on a valid scene (Validation Effect)
   useEffect(() => {
     if (isFlowing && sceneTagsArray.length > 0 && !sceneTagsArray.includes(currentSceneTag)) {
        // If current scene is empty/invalid, switch to the first available one
        const firstAvailable = sceneTagsArray[0];
-       setCurrentSceneTag(firstAvailable);
-       
-       // Also trigger audio change if needed
-       const playableItems = getPlayableItems(flowItems, firstAvailable);
-       if (playableItems.length > 0) {
-         const firstItem = playableItems[0];
-         if (audioRef.current) {
-            audioRef.current.pause();
-            setIsAudioPlaying(false);
-         }
-         setCurrentPlayingItem(firstItem);
-         setSelectedItem(firstItem);
-         handlePlayAudio(firstItem);
-       }
+       onSceneChange(firstAvailable);
     }
-  }, [isFlowing, sceneTagsArray, currentSceneTag, flowItems]);
+  }, [isFlowing, sceneTagsArray, currentSceneTag, onSceneChange]);
 
   // Calculate current subtitle
   const currentSubtitle = useMemo(() => {
@@ -789,16 +753,99 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
     return activeSubtitle?.text || '';
   }, [currentPlayingItem, currentTime]);
 
-  // Sync playback state
+  // Calculate current subtitle timing info
+  const currentSubtitleInfo = useMemo(() => {
+    if (!currentPlayingItem?.subtitles || currentPlayingItem.subtitles.length === 0) {
+      return { text: '', startTime: undefined, endTime: undefined };
+    }
+    
+    // Find the active subtitle index
+    const subtitles = currentPlayingItem.subtitles;
+    let activeIndex = -1;
+    for (let i = subtitles.length - 1; i >= 0; i--) {
+      const seconds = parseDurationToSeconds(subtitles[i].time);
+      if (seconds <= currentTime) {
+        activeIndex = i;
+        break;
+      }
+    }
+    
+    if (activeIndex === -1) {
+      return { text: '', startTime: undefined, endTime: undefined };
+    }
+    
+    const activeSubtitle = subtitles[activeIndex];
+    const startTime = parseDurationToSeconds(activeSubtitle.time);
+    
+    // End time is the start time of the next subtitle, or duration if it's the last one
+    let endTime: number;
+    if (activeIndex < subtitles.length - 1) {
+      endTime = parseDurationToSeconds(subtitles[activeIndex + 1].time);
+    } else {
+      // Use duration if available, otherwise estimate based on average subtitle duration
+      endTime = duration > 0 ? duration : startTime + 3; // Default 3 seconds if no duration
+    }
+    
+    return {
+      text: activeSubtitle.text,
+      startTime,
+      endTime
+    };
+  }, [currentPlayingItem, currentTime, duration]);
+
+  // Sync playback state - 支持详情页播放和 go flow 模式
   useEffect(() => {
      if (onPlaybackStateChange) {
+         // 优先使用 currentPlayingItem，如果没有则使用 selectedItem（详情页播放）
+         const activeItem = currentPlayingItem || selectedItem;
+         
+         // 如果 activeItem 有字幕，使用它的字幕信息
+         let subtitleText = '';
+         let subtitleStartTime: number | undefined = undefined;
+         let subtitleEndTime: number | undefined = undefined;
+         
+         if (activeItem?.subtitles && activeItem.subtitles.length > 0) {
+           // 找到当前时间对应的字幕
+           const subtitles = activeItem.subtitles;
+           let activeIndex = -1;
+           for (let i = subtitles.length - 1; i >= 0; i--) {
+             const seconds = parseDurationToSeconds(subtitles[i].time);
+             if (seconds <= currentTime) {
+               activeIndex = i;
+               break;
+             }
+           }
+           
+           if (activeIndex >= 0) {
+             const activeSubtitle = subtitles[activeIndex];
+             subtitleText = activeSubtitle.text;
+             subtitleStartTime = parseDurationToSeconds(activeSubtitle.time);
+             
+             // 计算结束时间
+             if (activeIndex < subtitles.length - 1) {
+               subtitleEndTime = parseDurationToSeconds(subtitles[activeIndex + 1].time);
+             } else {
+               subtitleEndTime = duration > 0 ? duration : subtitleStartTime + 3;
+             }
+           }
+         }
+         
+         // 使用计算出的字幕信息，如果没有则使用 currentSubtitleInfo（go flow 模式）
+         const finalText = subtitleText || currentSubtitleInfo.text || currentSubtitle || activeItem?.title || 'Listening...';
+         const finalStartTime = subtitleStartTime !== undefined ? subtitleStartTime : currentSubtitleInfo.startTime;
+         const finalEndTime = subtitleEndTime !== undefined ? subtitleEndTime : currentSubtitleInfo.endTime;
+         
          onPlaybackStateChange({
              isPlaying: isAudioPlaying,
-             currentText: currentSubtitle || currentPlayingItem?.title || 'Listening...',
-             playbackMode: isLiveMode ? 'live' : 'audio'
+             currentText: finalText,
+             playbackMode: isLiveMode ? 'live' : 'audio',
+             currentTime: currentTime,
+             duration: duration,
+             subtitleStartTime: finalStartTime,
+             subtitleEndTime: finalEndTime
          });
      }
-  }, [isAudioPlaying, currentSubtitle, currentPlayingItem, isLiveMode, onPlaybackStateChange]);
+  }, [isAudioPlaying, currentSubtitle, currentSubtitleInfo, currentPlayingItem, selectedItem, isLiveMode, currentTime, duration, onPlaybackStateChange]);
 
   // 自动播放逻辑：进入全屏心流页面时自动播放 (Enhanced)
   useEffect(() => {
@@ -808,7 +855,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
       
       // If we are not on a valid scene, switch to it
       if (currentSceneTag !== targetScene) {
-          setCurrentSceneTag(targetScene);
+          onSceneChange(targetScene);
       }
 
       const playableItems = getPlayableItems(flowItems, targetScene);
@@ -830,7 +877,7 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
   useEffect(() => {
     if (!isFlowing) {
       setHasAutoPlayed(false);
-      setCurrentSceneTag('default');
+      onSceneChange('default');
       setCurrentPlayingItem(null);
       if (audioRef.current) {
         audioRef.current.pause();
@@ -874,25 +921,32 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
         if (cachedAudioUrl) {
           console.log('[Cache] 使用缓存的音频');
           
-          // 模拟 TTS 生成流程的 loading（3-5 秒）
-          setTTSProgress({ stage: 'preparing', message: '准备生成音频...', percentage: 10 });
+          // 只在初始生成时（首次播放）才模拟假 loading
+          // 如果已经播放过（hasStarted 为 true），直接使用缓存，不显示 loading
+          const isInitialGeneration = !item.playbackProgress?.hasStarted;
           
-          await new Promise(resolve => setTimeout(resolve, 800));
-          setTTSProgress({ stage: 'calling-api', message: '调用 TTS API...', percentage: 30 });
+          if (isInitialGeneration) {
+            // 模拟 TTS 生成流程的 loading（3-5 秒）
+            setTTSProgress({ stage: 'preparing', message: '准备生成音频...', percentage: 10 });
+            
+            await new Promise(resolve => setTimeout(resolve, 800));
+            setTTSProgress({ stage: 'calling-api', message: '调用 TTS API...', percentage: 30 });
+            
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            setTTSProgress({ stage: 'processing', message: '处理音频数据...', percentage: 60 });
+            
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            setTTSProgress({ stage: 'generating', message: '生成音频中...', percentage: 80 });
+            
+            await new Promise(resolve => setTimeout(resolve, 800));
+            setTTSProgress({ stage: 'completed', message: '完成', percentage: 100 });
+            
+            await new Promise(resolve => setTimeout(resolve, 400));
+            
+            setTTSProgress(null);
+          }
           
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          setTTSProgress({ stage: 'processing', message: '处理音频数据...', percentage: 60 });
-          
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          setTTSProgress({ stage: 'generating', message: '生成音频中...', percentage: 80 });
-          
-          await new Promise(resolve => setTimeout(resolve, 800));
-          setTTSProgress({ stage: 'completed', message: '完成', percentage: 100 });
-          
-          await new Promise(resolve => setTimeout(resolve, 400));
-          
-          // 延迟后设置音频
-          setTTSProgress(null);
+          // 设置音频（无论是否显示 loading）
           setAudioUrl(cachedAudioUrl);
           setAudioParts([cachedAudioUrl]);
           setCurrentPartIndex(0);
@@ -2007,127 +2061,34 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
     );
   };
 
-  // 获取当前场景的索引
-  const currentSceneIndex = sceneTagsArray.indexOf(currentSceneTag);
-  
-  // 场景切换函数
-  const handleSceneChange = (direction: 'next' | 'prev') => {
-    const newIndex = direction === 'next' 
-      ? (currentSceneIndex + 1) % sceneTagsArray.length
-      : (currentSceneIndex - 1 + sceneTagsArray.length) % sceneTagsArray.length;
-    const newSceneTag = sceneTagsArray[newIndex];
-    setCurrentSceneTag(newSceneTag);
-    // 场景切换时立即查找并播放对应场景的音频
-    const playableItems = getPlayableItems(flowItems, newSceneTag);
+  // Handle audio switch when scene changes
+  useEffect(() => {
+    if (!isFlowing) return;
+    
+    const playableItems = getPlayableItems(flowItems, currentSceneTag);
     if (playableItems.length > 0) {
       const firstItem = playableItems[0];
-      // 停止当前播放
-      if (audioRef.current) {
-        audioRef.current.pause();
-        setIsAudioPlaying(false);
+      if (currentPlayingItem?.id !== firstItem.id) {
+          if (audioRef.current) {
+            audioRef.current.pause();
+            setIsAudioPlaying(false);
+          }
+          setCurrentPlayingItem(firstItem);
+          setSelectedItem(firstItem);
+          handlePlayAudio(firstItem);
       }
-      setCurrentPlayingItem(firstItem);
-      setSelectedItem(firstItem);
-      handlePlayAudio(firstItem);
     } else {
-      setCurrentPlayingItem(null);
-      setSelectedItem(null);
-      if (audioRef.current) {
-        audioRef.current.pause();
-        setIsAudioPlaying(false);
+      if (currentPlayingItem && !playableItems.some(i => i.id === currentPlayingItem.id)) {
+          setCurrentPlayingItem(null);
+          setSelectedItem(null);
+          if (audioRef.current) {
+            audioRef.current.pause();
+            setIsAudioPlaying(false);
+          }
       }
     }
-  };
-
-  // 拨轮场景切换组件 (Revised for Horizontal Layout)
-  const renderSceneWheel = () => {
-    // Show even if only 1 scene, but hide arrows
-    if (sceneTagsArray.length === 0) return null;
-
-    const isSingleScene = sceneTagsArray.length <= 1;
-
-    const prevIndex = (currentSceneIndex - 1 + sceneTagsArray.length) % sceneTagsArray.length;
-    const nextIndex = (currentSceneIndex + 1) % sceneTagsArray.length;
-    
-    // Safety check for empty array handled above, but indices need care if length is 1
-    const prevScene = sceneTagsArray.length > 0 ? SCENE_CONFIGS[sceneTagsArray[prevIndex]] : SCENE_CONFIGS['default'];
-    const currentScene = SCENE_CONFIGS[currentSceneTag];
-    const nextScene = sceneTagsArray.length > 0 ? SCENE_CONFIGS[sceneTagsArray[nextIndex]] : SCENE_CONFIGS['default'];
-
-    return (
-      <div className="flex flex-col items-center gap-8 mb-8 w-full">
-        {/* Horizontal Scene Switcher */}
-        <div className="flex items-center justify-center gap-4 w-full px-2">
-          {/* Previous Scene (Left) - Only show if multiple scenes */}
-          {!isSingleScene && (
-            <motion.div
-                layout
-                initial={{ opacity: 0.3, scale: 0.8, x: 20 }}
-                animate={{ opacity: 0.4, scale: 0.85, x: 0 }}
-                className="flex flex-col items-center gap-2 cursor-pointer z-0 active:scale-95 transition-transform w-20"
-                onClick={() => handleSceneChange('prev')}
-            >
-                <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-colors">
-                <prevScene.icon size={20} className="text-white/40" />
-                </div>
-                <span className="text-[10px] text-white/30 font-medium truncate w-full text-center">{prevScene.label}</span>
-            </motion.div>
-          )}
-
-          {/* Current Scene (Center) */}
-          <motion.div
-            layout
-            initial={{ scale: 0.9 }}
-            animate={{ scale: 1 }}
-            className="flex flex-col items-center gap-3 z-10 mx-2 w-32"
-          >
-            <motion.div
-              layout
-              className="w-24 h-24 rounded-full bg-gradient-to-br from-indigo-500/30 to-purple-500/30 border-2 border-white/20 flex items-center justify-center shadow-lg shadow-indigo-500/20"
-              whileHover={{ scale: 1.05 }}
-            >
-              <currentScene.icon size={36} className="text-white" />
-            </motion.div>
-            <div className="flex flex-col items-center gap-1 w-full">
-              <span className="text-sm font-bold text-white truncate w-full text-center">{currentScene.label}</span>
-              <span className="text-[10px] text-white/50 truncate w-full text-center">{currentScene.description}</span>
-            </div>
-          </motion.div>
-
-          {/* Next Scene (Right) - Only show if multiple scenes */}
-          {!isSingleScene && (
-            <motion.div
-                layout
-                initial={{ opacity: 0.3, scale: 0.8, x: -20 }}
-                animate={{ opacity: 0.4, scale: 0.85, x: 0 }}
-                className="flex flex-col items-center gap-2 cursor-pointer z-0 active:scale-95 transition-transform w-20"
-                onClick={() => handleSceneChange('next')}
-            >
-                <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition-colors">
-                <nextScene.icon size={20} className="text-white/40" />
-                </div>
-                <span className="text-[10px] text-white/30 font-medium truncate w-full text-center">{nextScene.label}</span>
-            </motion.div>
-          )}
-        </div>
-
-        {/* Scene Indicators - Only show if multiple scenes */}
-        {!isSingleScene && (
-            <div className="flex gap-1.5">
-            {sceneTagsArray.map((tag, index) => (
-                <div
-                key={tag}
-                className={clsx(
-                    "w-1.5 h-1.5 rounded-full transition-all",
-                    index === currentSceneIndex ? "bg-white w-6" : "bg-white/30"
-                )}
-                />
-            ))}
-            </div>
-        )}
-      </div>
-    );
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSceneTag, isFlowing]);
 
   if (isFlowing) {
     const playableItemsForCurrentScene = getPlayableItems(flowItems, currentSceneTag);
@@ -2179,7 +2140,12 @@ export function SupplyDepotApp({ onStartFlow, onStopFlow, isFlowing, knowledgeCa
                  </AnimatePresence>
             </div>
             
-            {renderSceneWheel()}
+            <SceneWheel 
+          currentSceneTag={currentSceneTag}
+          onSceneChange={onSceneChange}
+          availableScenes={sceneTagsArray}
+          theme="dark"
+        />
         </div>
 
         {/* Bottom Section: End Button */}

@@ -5,10 +5,12 @@ import { HeadsetDevice } from './components/HeadsetDevice';
 import { PrinterDevice } from './components/PrinterDevice';
 import { Headphones, Printer } from 'lucide-react';
 import clsx from 'clsx';
+import { type SceneTag } from './config/scene-config';
 
 function App() {
   const [isFlowing, setIsFlowing] = useState(false);
-  const [currentContext, setCurrentContext] = useState<'deep_work' | 'casual'>('deep_work');
+  const [currentSceneTag, setCurrentSceneTag] = useState<SceneTag>('default');
+  const [availableScenes, setAvailableScenes] = useState<SceneTag[]>(['default']);
   const [activeHardware, setActiveHardware] = useState<'headset' | 'printer'>('headset');
   const [printedContent, setPrintedContent] = useState<string | null>(null);
   const [knowledgeCards, setKnowledgeCards] = useState<KnowledgeCard[]>([]);
@@ -23,13 +25,12 @@ function App() {
     setPrintedContent(null);
   };
 
-  const toggleContext = () => {
-    setCurrentContext(prev => prev === 'deep_work' ? 'casual' : 'deep_work');
-  };
-
   // Simulate Printer Action
   useEffect(() => {
-    if (isFlowing && currentContext === 'deep_work') {
+    // Check if current scene is a "focus" type scene (mapping old 'deep_work' concept)
+    const isDeepWork = currentSceneTag === 'focus' || currentSceneTag === 'qa_memory';
+    
+    if (isFlowing && isDeepWork) {
         const timer = setTimeout(() => {
             const content = "语法提示:\n虚拟语气\n\n正确: If I were you...\n错误: If I was you...";
             setPrintedContent(content);
@@ -47,7 +48,7 @@ function App() {
         }, 8000);
         return () => clearTimeout(timer);
     }
-  }, [isFlowing, currentContext]);
+  }, [isFlowing, currentSceneTag]);
 
   return (
     <div className="min-h-screen bg-neutral-100 flex items-center justify-center p-8 font-sans">
@@ -62,8 +63,9 @@ function App() {
                     isFlowing={isFlowing}
                     knowledgeCards={knowledgeCards}
                     onUpdateKnowledgeCards={setKnowledgeCards}
-                    currentContext={currentContext}
-                    onContextChange={setCurrentContext}
+                    currentSceneTag={currentSceneTag}
+                    onSceneChange={setCurrentSceneTag}
+                    onAvailableScenesChange={setAvailableScenes}
                     onPlaybackStateChange={setPlaybackState}
                 />
             </PhoneFrame>
@@ -104,8 +106,9 @@ function App() {
                 <div className="flex-1 relative bg-gradient-to-br from-neutral-50 to-white overflow-hidden">
                     <div className={clsx("absolute inset-0 transition-opacity duration-500", activeHardware === 'headset' ? "opacity-100 z-10" : "opacity-0 z-0")}>
                         <HeadsetDevice 
-                            currentContext={currentContext} 
-                            onToggleContext={toggleContext}
+                            currentSceneTag={currentSceneTag} 
+                            onSceneChange={setCurrentSceneTag}
+                            availableScenes={availableScenes}
                             isPlaying={isFlowing}
                             playbackState={playbackState}
                             audioUrl={null}

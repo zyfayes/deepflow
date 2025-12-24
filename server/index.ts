@@ -327,7 +327,7 @@ app.get('/api/proxy-audio', async (req, res): Promise<any> => {
                 'Referer': 'https://translate.google.com/',
                 'Accept': '*/*',
             },
-            timeout: 15000 // 15 seconds timeout
+            timeout: 30000 // 30 seconds timeout
         });
 
         res.set('Content-Type', 'audio/mpeg');
