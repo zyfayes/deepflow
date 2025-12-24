@@ -1,20 +1,191 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { PhoneFrame } from './components/PhoneFrame';
 import { SupplyDepotApp, type KnowledgeCard, type FlowPlaybackState } from './components/SupplyDepotApp';
 import { HeadsetDevice } from './components/HeadsetDevice';
 import { PrinterDevice } from './components/PrinterDevice';
-import { Headphones, Printer } from 'lucide-react';
+import { GlassesDevice } from './components/GlassesDevice';
+import { SceneBackground } from './components/SceneBackground';
+import { Headphones, Printer, Glasses } from 'lucide-react';
 import clsx from 'clsx';
-import { type SceneTag } from './config/scene-config';
+import { type SceneTag, SCENE_CONFIGS } from './config/scene-config';
+import { getApiUrl } from './utils/api-config';
+import { useSceneBackground } from './hooks/useSceneBackground';
+
+// Demo示意小票数据
+const MOCK_DEMO_CONTENTS: Array<{ id: string; content: string; timestamp: number }> = [
+  {
+    id: 'demo-1',
+    content: 'E = mc²\n\n爱因斯坦质能方程\n描述了质量和能量\n的等价关系',
+    timestamp: Date.now() - 3000
+  },
+  {
+    id: 'demo-2',
+    content: 'y = ax² + bx + c\n\n二次函数标准形式\n其中 a ≠ 0',
+    timestamp: Date.now() - 2000
+  },
+  {
+    id: 'demo-3',
+    content: '∫₀^∞ e^(-x²) dx = √π/2\n\n高斯积分\n概率论和统计中\n的重要结果',
+    timestamp: Date.now() - 1000
+  }
+];
+
+// Glasses Capture Assets Sequence
+const CAPTURE_ASSETS = [
+  '/assets/math-problem.jpg',
+  '/assets/历史笔记-1.webp',
+  '/assets/历史笔记-2.webp',
+  '/assets/历史笔记-3.webp'
+];
+
+// Reusable Hardware Card Component for consistent layout
+const HardwareCard = ({ 
+  productName, 
+  slogan, 
+  icon: Icon, 
+  children, 
+  isActive, 
+  className 
+}: { 
+  productName: string, 
+  slogan: string, 
+  icon: any, 
+  children: React.ReactNode, 
+  isActive: boolean, 
+  className?: string 
+}) => (
+  <div className={clsx("flex flex-col items-center gap-6 w-full", className)}>
+      <div className="bg-white rounded-[40px] shadow-xl border border-white/50 flex flex-col overflow-hidden relative ring-1 ring-black/5 transition-all duration-500 w-full h-[640px] group hover:shadow-2xl hover:scale-[1.02]">
+          <div className="absolute top-6 right-6 px-3 py-1.5 bg-neutral-900/5 rounded-full text-[10px] font-mono text-neutral-500 pointer-events-none z-30 flex items-center gap-2 backdrop-blur-sm border border-white/20">
+              <Icon size={12} />
+              <span className="tracking-wider font-bold">{isActive ? "ACTIVE" : "IDLE"}</span>
+          </div>
+          <div className="flex-1 relative bg-gradient-to-br from-neutral-50 to-white overflow-hidden flex flex-col items-center justify-start pt-24">
+              {children}
+          </div>
+      </div>
+      <div className="flex flex-col items-center gap-1.5 text-center">
+          <h3 className="text-sm font-extrabold text-neutral-800 tracking-[0.2em] uppercase">{productName}</h3>
+          <p className="text-[10px] font-medium text-neutral-400 tracking-wider uppercase opacity-80">{slogan}</p>
+      </div>
+  </div>
+);
 
 function App() {
   const [isFlowing, setIsFlowing] = useState(false);
   const [currentSceneTag, setCurrentSceneTag] = useState<SceneTag>('default');
-  const [availableScenes, setAvailableScenes] = useState<SceneTag[]>(['default']);
-  const [activeHardware, setActiveHardware] = useState<'headset' | 'printer'>('headset');
-  const [printedContent, setPrintedContent] = useState<string | null>(null);
+  // const [activeHardware, setActiveHardware] = useState<'headset' | 'printer'>('headset'); // Removed for grid layout
+  const [printedContents, setPrintedContents] = useState<Array<{ id: string; content: string; timestamp: number }>>([]);
   const [knowledgeCards, setKnowledgeCards] = useState<KnowledgeCard[]>([]);
   const [playbackState, setPlaybackState] = useState<FlowPlaybackState | null>(null);
+  const [transcription, setTranscription] = useState<{ source: 'input' | 'output'; text: string } | null>(null);
+  const [capturedFile, setCapturedFile] = useState<File | null>(null);
+  const [uploadedAudioFile, setUploadedAudioFile] = useState<File | null>(null);
+  const [captureIndex, setCaptureIndex] = useState(0);
+  const [availableScenes, setAvailableScenes] = useState<SceneTag[]>([]);
+  const [environmentCycleIndex, setEnvironmentCycleIndex] = useState<number>(-1);
+  
+  // Scene background management
+  const sceneBackground = useSceneBackground(currentSceneTag);
+  
+  // 环境循环逻辑：过滤出有背景效果的场景
+  const scenesWithBackground = availableScenes.filter(sceneTag => {
+    const config = SCENE_CONFIGS[sceneTag];
+    return config.backgroundEffect !== null;
+  });
+  
+  // 环境按钮点击处理
+  const handleEnvironmentButtonClick = () => {
+    if (scenesWithBackground.length === 0) return;
+    
+    const nextIndex = (environmentCycleIndex + 1) % (scenesWithBackground.length + 1);
+    
+    if (nextIndex === 0) {
+      // 第一次点击：激活第一个环境
+      const targetScene = scenesWithBackground[0];
+      setEnvironmentCycleIndex(0);
+      setCurrentSceneTag(targetScene);
+      
+      // 立即激活背景效果（不等待 useEffect）
+      const config = SCENE_CONFIGS[targetScene];
+      if (config.backgroundEffect) {
+        sceneBackground.activate();
+      }
+      
+      // 播放提示音频
+      if (config.audioPrompt) {
+        const audio = new Audio(config.audioPrompt);
+        audio.play().catch(console.error);
+      }
+      
+      startFlow(); // 进入 FlowList 模式，SupplyDepotApp 会自动播放
+    } else if (nextIndex < scenesWithBackground.length) {
+      // 后续点击：切换到下一个环境
+      const targetScene = scenesWithBackground[nextIndex];
+      setEnvironmentCycleIndex(nextIndex);
+      setCurrentSceneTag(targetScene);
+      
+      // 立即激活背景效果（不等待 useEffect）
+      const config = SCENE_CONFIGS[targetScene];
+      if (config.backgroundEffect) {
+        sceneBackground.activate();
+      }
+      
+      // 播放提示音频
+      if (config.audioPrompt) {
+        const audio = new Audio(config.audioPrompt);
+        audio.play().catch(console.error);
+      }
+      
+      // 如果已经在 FlowList 模式，切换场景后会自动播放
+      if (!isFlowing) {
+        startFlow();
+      }
+    } else {
+      // 最后一次点击：关闭环境
+      setEnvironmentCycleIndex(-1);
+      sceneBackground.deactivate();
+      // 不停止 Flow，只是关闭背景效果（通过 activeEnvironmentScene 变为 null 来实现）
+    }
+  };
+  
+  // 当前激活的环境场景
+  const activeEnvironmentScene = environmentCycleIndex >= 0 && environmentCycleIndex < scenesWithBackground.length
+    ? scenesWithBackground[environmentCycleIndex]
+    : null;
+  
+  // 环境按钮是否应该显示：只要有背景效果的场景有可播放音频就显示
+  const shouldShowEnvironmentButton = scenesWithBackground.length > 0;
+  
+  // 环境按钮是否激活
+  const isEnvironmentActive = environmentCycleIndex >= 0;
+  
+  // 当环境激活时，同步背景效果（作为备用，主要逻辑在 handleEnvironmentButtonClick 中）
+  useEffect(() => {
+    if (activeEnvironmentScene) {
+      // 使用 activeEnvironmentScene 的背景效果
+      const config = SCENE_CONFIGS[activeEnvironmentScene];
+      if (config.backgroundEffect) {
+        // 确保场景标签也更新，这样背景效果能正确显示
+        if (currentSceneTag !== activeEnvironmentScene) {
+          setCurrentSceneTag(activeEnvironmentScene);
+        }
+        // 只在 useEffect 中作为备用激活（主要激活在 handleEnvironmentButtonClick 中）
+        if (!sceneBackground.isActive) {
+          sceneBackground.activate();
+        }
+      }
+    } else {
+      sceneBackground.deactivate();
+    }
+  }, [activeEnvironmentScene, sceneBackground, currentSceneTag]);
+  
+  // 打印机三种模式的状态管理
+  const [demoPrintedContents, setDemoPrintedContents] = useState<Array<{ id: string; content: string; timestamp: number }>>([]);
+  const [demoPrintIndex, setDemoPrintIndex] = useState(0); // Demo小票的打印索引
+  const [conversationHistory, setConversationHistory] = useState<Array<{ source: 'input' | 'output'; text: string; timestamp: number }>>([]);
+  const [printedCardIds, setPrintedCardIds] = useState<Set<string>>(new Set());
+  const conversationHistoryRef = useRef<Array<{ source: 'input' | 'output'; text: string; timestamp: number }>>([]);
 
   const startFlow = () => {
     setIsFlowing(true);
@@ -22,113 +193,311 @@ function App() {
 
   const stopFlow = () => {
     setIsFlowing(false);
-    setPrintedContent(null);
+    setPrintedContents([]);
+    // 重置Demo小票和已打印卡片记录
+    setDemoPrintedContents([]);
+    setDemoPrintIndex(0);
+    setPrintedCardIds(new Set());
   };
 
-  // Simulate Printer Action
+  // 当音频开始播放时，清除Demo小票
   useEffect(() => {
-    // Check if current scene is a "focus" type scene (mapping old 'deep_work' concept)
-    const isDeepWork = currentSceneTag === 'focus' || currentSceneTag === 'qa_memory';
-    
-    if (isFlowing && isDeepWork) {
-        const timer = setTimeout(() => {
-            const content = "语法提示:\n虚拟语气\n\n正确: If I were you...\n错误: If I was you...";
-            setPrintedContent(content);
-            setActiveHardware('printer'); // Auto switch view to printer
-            
-            // Add to knowledge garden
-            setKnowledgeCards(prev => [{
-                id: Date.now().toString(),
-                title: "虚拟语气解析",
-                content: content,
-                tags: ["英语", "语法", "错题"],
-                timestamp: new Date()
-            }, ...prev]);
-
-        }, 8000);
-        return () => clearTimeout(timer);
+    if (playbackState?.isPlaying && (demoPrintedContents.length > 0 || demoPrintIndex > 0)) {
+      setDemoPrintedContents([]);
+      setDemoPrintIndex(0);
     }
-  }, [isFlowing, currentSceneTag]);
+  }, [playbackState?.isPlaying]);
+
+  // 收集实时对话历史（仅在live模式）
+  const prevTranscriptionRef = useRef<string>('');
+  useEffect(() => {
+    if (playbackState?.playbackMode === 'live' && transcription) {
+      // 避免重复添加相同的transcription（通过比较text内容）
+      const transcriptionKey = `${transcription.source}:${transcription.text}`;
+      if (transcriptionKey !== prevTranscriptionRef.current) {
+        prevTranscriptionRef.current = transcriptionKey;
+        
+        const newEntry = {
+          source: transcription.source,
+          text: transcription.text,
+          timestamp: Date.now()
+        };
+        
+        conversationHistoryRef.current = [...conversationHistoryRef.current, newEntry];
+        // 限制历史记录长度为最近20条
+        if (conversationHistoryRef.current.length > 20) {
+          conversationHistoryRef.current = conversationHistoryRef.current.slice(-20);
+        }
+        setConversationHistory([...conversationHistoryRef.current]);
+      }
+    }
+  }, [transcription, playbackState?.playbackMode]);
+
+  // 当停止实时对话时，清空对话历史
+  useEffect(() => {
+    if (playbackState?.playbackMode !== 'live') {
+      conversationHistoryRef.current = [];
+      setConversationHistory([]);
+      prevTranscriptionRef.current = '';
+    }
+  }, [playbackState?.playbackMode]);
+
+  // Handle capture from glasses
+  const handleGlassesCapture = async () => {
+    try {
+        // Get current asset based on index
+        const currentAsset = CAPTURE_ASSETS[captureIndex];
+        
+        const response = await fetch(currentAsset);
+        const blob = await response.blob();
+        
+        // Determine filename and type
+        const filename = currentAsset.split('/').pop() || `capture_${Date.now()}.jpg`;
+        const type = filename.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+        
+        const file = new File([blob], filename, { 
+            type,
+            lastModified: 1704067200000 // Fixed timestamp (2024-01-01) to ensure consistent hash for caching
+        });
+        setCapturedFile(file);
+        
+        // Cycle to next image for next capture
+        setCaptureIndex(prev => (prev + 1) % CAPTURE_ASSETS.length);
+        
+        // Reset after a short delay so the same file can be captured again if needed
+        setTimeout(() => setCapturedFile(null), 500);
+    } catch (error) {
+        console.error('Failed to load mock capture image:', error);
+    }
+  };
+
+  // Handle record from headset (long press)
+  const handleHeadsetRecord = async () => {
+    try {
+      const audioPath = '/assets/中考数学几何最值问题讲解_2025_12_23.m4a';
+      const response = await fetch(audioPath);
+      const blob = await response.blob();
+      
+      const file = new File([blob], '中考数学几何最值问题讲解_2025_12_23.m4a', { 
+        type: 'audio/mp4',
+        lastModified: 1704067200000 // Fixed timestamp to ensure consistent hash for caching
+      });
+      setUploadedAudioFile(file);
+      
+      // Reset after a short delay
+      setTimeout(() => setUploadedAudioFile(null), 1000);
+    } catch (error) {
+      console.error('Failed to load mock audio file:', error);
+    }
+  };
+
+  // Handle print trigger from knowledge cards
+  const handlePrintTrigger = (card: KnowledgeCard) => {
+    // Format the content for printing
+    const printContent = `${card.title}\n\n${card.content}${card.tags.length > 0 ? `\n\n标签: ${card.tags.join(', ')}` : ''}`;
+    // Add to printed contents array for stacking effect
+    setPrintedContents(prev => [...prev, {
+      id: card.id,
+      content: printContent,
+      timestamp: Date.now()
+    }]);
+    // setActiveHardware('printer'); // Removed auto switch
+  };
+
+  // 总结对话的API调用
+  const summarizeConversation = async (history: Array<{ source: 'input' | 'output'; text: string; timestamp: number }>): Promise<KnowledgeCard> => {
+    try {
+      const response = await fetch(getApiUrl('/api/summarize-conversation'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          conversationHistory: history.map(h => ({
+            source: h.source,
+            text: h.text
+          }))
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('对话总结失败');
+      }
+
+      const data = await response.json();
+      return {
+        id: `summary-${Date.now()}`,
+        title: data.title || '对话总结',
+        content: data.content || data.summary || '暂无总结内容',
+        tags: data.tags || ['对话', '总结'],
+        timestamp: new Date(),
+        source: 'ai_realtime'
+      };
+    } catch (error) {
+      console.error('总结对话失败:', error);
+      // 返回一个默认的总结卡片
+      return {
+        id: `summary-${Date.now()}`,
+        title: '对话总结',
+        content: '总结生成失败，请稍后再试',
+        tags: ['对话', '总结'],
+        timestamp: new Date(),
+        source: 'ai_realtime'
+      };
+    }
+  };
+
+  // 处理打印机按钮点击（三种模式）
+  const handlePrintButtonClick = async () => {
+    // 情况1：Demo模式 - 无音频播放
+    if (!playbackState?.isPlaying) {
+      // 如果已经打印完所有Demo小票（3张），第四次点击时重置
+      if (demoPrintIndex >= MOCK_DEMO_CONTENTS.length) {
+        setDemoPrintedContents([]);
+        setDemoPrintIndex(0);
+        return;
+      }
+      
+      // 每次点击打印一张Demo小票
+      const nextCard = MOCK_DEMO_CONTENTS[demoPrintIndex];
+      setDemoPrintedContents(prev => [...prev, {
+        ...nextCard,
+        timestamp: Date.now() // 更新时间为当前时间，确保动画效果
+      }]);
+      setDemoPrintIndex(prev => prev + 1);
+      return;
+    }
+
+    // 情况2：音频播放模式
+    if (playbackState.playbackMode === 'audio') {
+      // 找到第一个未打印的知识卡片
+      const unprintedCard = knowledgeCards.find(
+        card => !printedCardIds.has(card.id)
+      );
+      if (unprintedCard) {
+        handlePrintTrigger(unprintedCard);
+        setPrintedCardIds(prev => new Set(prev).add(unprintedCard.id));
+      }
+      return;
+    }
+
+    // 情况3：实时对话模式
+    if (playbackState.playbackMode === 'live') {
+      // 确保有对话历史
+      if (conversationHistory.length === 0) {
+        console.log('暂无对话历史，无法总结');
+        return;
+      }
+
+      try {
+        // 调用API总结最近的对话
+        const summaryCard = await summarizeConversation(conversationHistory);
+        handlePrintTrigger(summaryCard);
+      } catch (error) {
+        console.error('总结对话失败:', error);
+      }
+      return;
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-neutral-100 flex items-center justify-center p-8 font-sans">
-      <div className="flex gap-8 items-center flex-wrap justify-center transition-all duration-500 flex-row">
+    <div className="min-h-screen bg-neutral-100 flex flex-col items-center py-12 px-8 font-sans overflow-x-hidden relative">
+      {/* Scene Background */}
+      <SceneBackground 
+        backgroundEffect={activeEnvironmentScene ? SCENE_CONFIGS[activeEnvironmentScene].backgroundEffect : null} 
+        isActive={isEnvironmentActive} 
+      />
+      
+      <div className="flex flex-col w-full max-w-[1800px] mx-auto relative z-20">
         
-        {/* Device View */}
-        <div className="flex flex-col items-center gap-4 relative">
-            <PhoneFrame fullscreen={isFlowing}>
-                <SupplyDepotApp 
-                    onStartFlow={startFlow} 
-                    onStopFlow={stopFlow}
-                    isFlowing={isFlowing}
-                    knowledgeCards={knowledgeCards}
-                    onUpdateKnowledgeCards={setKnowledgeCards}
-                    currentSceneTag={currentSceneTag}
-                    onSceneChange={setCurrentSceneTag}
-                    onAvailableScenesChange={setAvailableScenes}
-                    onPlaybackStateChange={setPlaybackState}
+        {/* Main Header */}
+        <header className="mb-12 pl-4 border-l-4 border-neutral-800">
+          <h1 className="text-3xl font-bold text-neutral-800 tracking-tight">GoFlow Station</h1>
+          <p className="text-sm text-neutral-500 mt-2 font-mono tracking-wide">MULTIMODAL HARDWARE INTERFACE</p>
+        </header>
+
+        <div className="flex flex-col xl:flex-row gap-16 items-start justify-center">
+          
+          {/* Device View - Phone (Left Sidebar) */}
+          <div className="flex flex-col items-center gap-6 shrink-0 relative">
+              <PhoneFrame fullscreen={isFlowing}>
+                  <SupplyDepotApp 
+                      onStartFlow={startFlow} 
+                      onStopFlow={stopFlow}
+                      isFlowing={isFlowing}
+                      knowledgeCards={knowledgeCards}
+                      onUpdateKnowledgeCards={setKnowledgeCards}
+                      currentSceneTag={currentSceneTag}
+                      onSceneChange={setCurrentSceneTag}
+                      onPlaybackStateChange={setPlaybackState}
+                      onPrintTrigger={handlePrintTrigger}
+                      onTranscription={setTranscription}
+                      externalInputFile={capturedFile}
+                      externalAudioFile={uploadedAudioFile}
+                      onAvailableScenesChange={setAvailableScenes}
+                  />
+              </PhoneFrame>
+              <div className="flex flex-col items-center gap-1">
+                  <span className="text-sm font-extrabold text-neutral-800 tracking-[0.2em] uppercase">Go Flow App</span>
+                  <span className="text-[10px] font-medium text-neutral-400 tracking-wider uppercase opacity-80">Central Control Unit</span>
+              </div>
+          </div>
+
+          {/* Hardware Grid (Right Side - Equal Width) */}
+          <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-8 w-full">
+            
+            {/* Headset */}
+            <HardwareCard 
+              productName="GoFlow Focus" 
+              slogan="Immersive Audio Intelligence" 
+              icon={Headphones} 
+              isActive={isFlowing}
+            >
+                <HeadsetDevice 
+                    currentSceneTag={currentSceneTag} 
+                    isPlaying={isFlowing}
+                    playbackState={playbackState}
+                    audioUrl={null}
+                    onRecord={handleHeadsetRecord}
+                    onStartFlow={startFlow}
+                    onActivateBackground={handleEnvironmentButtonClick}
+                    currentEnvironmentScene={activeEnvironmentScene}
+                    hasBackgroundEffect={shouldShowEnvironmentButton}
                 />
-            </PhoneFrame>
-            <div className="flex items-center gap-4">
-                <span className="text-xs font-bold text-neutral-400 tracking-widest uppercase">移动终端 (Mobile Terminal)</span>
-            </div>
-        </div>
+            </HardwareCard>
 
-        {/* Hardware Simulator */}
-        <div className="flex flex-col items-center gap-4 transition-all duration-500 w-[500px]">
-            <div className="bg-white rounded-[40px] shadow-2xl border border-white/50 flex flex-col overflow-hidden relative ring-1 ring-black/5 transition-all duration-500 w-[500px] h-[600px]">
-                
-                {/* Hardware Tabs */}
-                <div className="flex bg-neutral-50/50 backdrop-blur-md z-20 flex-row w-full border-b border-neutral-100 p-2 gap-2">
-                    <button 
-                        onClick={() => setActiveHardware('headset')}
-                        className={clsx(
-                            "rounded-2xl flex items-center justify-center gap-2 text-sm font-medium transition-all duration-200 flex-1 py-3 flex-row",
-                            activeHardware === 'headset' ? "bg-white shadow-md text-neutral-800" : "text-neutral-400 hover:bg-white/50"
-                        )}
-                    >
-                        <Headphones size={18} />
-                        耳机 (Headset)
-                    </button>
-                    <button 
-                        onClick={() => setActiveHardware('printer')}
-                        className={clsx(
-                            "rounded-2xl flex items-center justify-center gap-2 text-sm font-medium transition-all duration-200 flex-1 py-3 flex-row",
-                            activeHardware === 'printer' ? "bg-white shadow-md text-neutral-800" : "text-neutral-400 hover:bg-white/50"
-                        )}
-                    >
-                        <Printer size={18} />
-                        打印机 (Printer)
-                    </button>
-                </div>
+            {/* Glasses */}
+            <HardwareCard 
+              productName="GoFlow Vision" 
+              slogan="Augmented Reality Interface" 
+              icon={Glasses} 
+              isActive={isFlowing}
+            >
+              <GlassesDevice 
+                onCapture={handleGlassesCapture} 
+                nextImageSrc={CAPTURE_ASSETS[captureIndex]}
+              />
+            </HardwareCard>
 
-                {/* Hardware View */}
-                <div className="flex-1 relative bg-gradient-to-br from-neutral-50 to-white overflow-hidden">
-                    <div className={clsx("absolute inset-0 transition-opacity duration-500", activeHardware === 'headset' ? "opacity-100 z-10" : "opacity-0 z-0")}>
-                        <HeadsetDevice 
-                            currentSceneTag={currentSceneTag} 
-                            onSceneChange={setCurrentSceneTag}
-                            availableScenes={availableScenes}
-                            isPlaying={isFlowing}
-                            playbackState={playbackState}
-                            audioUrl={null}
-                        />
-                    </div>
-                    <div className={clsx("absolute inset-0 transition-opacity duration-500", activeHardware === 'printer' ? "opacity-100 z-10" : "opacity-0 z-0")}>
-                        <PrinterDevice printedContent={printedContent} />
-                    </div>
-                </div>
-                
-                {/* Simulation Overlay/Label */}
-                <div className="absolute bottom-4 right-4 px-3 py-1 bg-neutral-900/5 rounded-full text-[10px] font-mono text-neutral-400 pointer-events-none z-30">
-                    SIMULATION_MODE: {isFlowing ? "ACTIVE" : "IDLE"}
-                </div>
-            </div>
-            <span className="text-xs font-bold text-neutral-400 tracking-widest uppercase">硬件模拟器 (Hardware Simulator)</span>
+            {/* Printer */}
+            <HardwareCard 
+              productName="GoFlow Note" 
+              slogan="Physical Memory Anchor" 
+              icon={Printer} 
+              isActive={printedContents.length > 0 || demoPrintedContents.length > 0}
+            >
+                <PrinterDevice 
+                  printedContents={demoPrintedContents.length > 0 ? demoPrintedContents : printedContents}
+                  transcription={transcription}
+                  onPrintClick={handlePrintButtonClick}
+                />
+            </HardwareCard>
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
 
 export default App;

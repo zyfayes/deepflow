@@ -7,7 +7,9 @@ export function useLiveSession(
     knowledgeCards: any[],
     onConnect?: () => void,
     onDisconnect?: () => void,
-    onError?: (error: any) => void
+    onError?: (error: any) => void,
+    onKnowledgeCard?: (card: any) => void,
+    onTranscription?: (transcription: { source: 'input' | 'output'; text: string }) => void
 ) {
     const [isConnected, setIsConnected] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
@@ -22,8 +24,21 @@ export function useLiveSession(
     const nextStartTimeRef = useRef<number>(0);
 
     const playAudioChunk = (base64Data: string, mimeType?: string) => {
-        if (!audioContextRef.current) return;
+        if (!audioContextRef.current) {
+            console.warn('[useLiveSession] AudioContext not available, creating new one');
+            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
         const ctx = audioContextRef.current;
+        
+        // Resume AudioContext if suspended (required for autoplay policies)
+        if (ctx.state === 'suspended') {
+            console.log('[useLiveSession] AudioContext suspended, resuming...');
+            ctx.resume().catch(err => {
+                console.error('[useLiveSession] Failed to resume AudioContext:', err);
+            });
+        }
+        
+        console.log('[useLiveSession] Playing audio chunk, mimeType:', mimeType, 'data length:', base64Data.length);
         const arrayBuffer = base64ToArrayBuffer(base64Data);
         const float32Data = new Float32Array(arrayBuffer.byteLength / 2);
         const dataView = new DataView(arrayBuffer);
@@ -50,19 +65,25 @@ export function useLiveSession(
             console.warn(`Unexpected sample rate ${sampleRate}, using 24000 Hz for Gemini Live API`);
             sampleRate = 24000;
         }
-        const buffer = ctx.createBuffer(1, float32Data.length, sampleRate); 
-        buffer.getChannelData(0).set(float32Data);
+        try {
+            const buffer = ctx.createBuffer(1, float32Data.length, sampleRate); 
+            buffer.getChannelData(0).set(float32Data);
 
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(ctx.destination);
+            const source = ctx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(ctx.destination);
 
-        const currentTime = ctx.currentTime;
-        if (nextStartTimeRef.current < currentTime) {
-            nextStartTimeRef.current = currentTime;
+            const currentTime = ctx.currentTime;
+            if (nextStartTimeRef.current < currentTime) {
+                nextStartTimeRef.current = currentTime;
+            }
+            
+            console.log('[useLiveSession] Starting audio playback at:', nextStartTimeRef.current, 'duration:', buffer.duration);
+            source.start(nextStartTimeRef.current);
+            nextStartTimeRef.current += buffer.duration;
+        } catch (playError) {
+            console.error('[useLiveSession] Error playing audio chunk:', playError);
         }
-        source.start(nextStartTimeRef.current);
-        nextStartTimeRef.current += buffer.duration;
     };
 
     const connect = useCallback(async () => {
@@ -74,6 +95,19 @@ export function useLiveSession(
 
             // Reset error flag
             hasErrorRef.current = false;
+
+            // Initialize AudioContext for audio playback
+            if (!audioContextRef.current) {
+                audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+                console.log('[useLiveSession] AudioContext created, state:', audioContextRef.current.state);
+            }
+            
+            // Resume AudioContext if suspended (required for autoplay policies)
+            if (audioContextRef.current.state === 'suspended') {
+                console.log('[useLiveSession] Resuming suspended AudioContext...');
+                await audioContextRef.current.resume();
+                console.log('[useLiveSession] AudioContext resumed, state:', audioContextRef.current.state);
+            }
 
             // Close and clean up existing EventSource connection if any
             if (eventSourceRef.current) {
@@ -89,10 +123,11 @@ export function useLiveSession(
             nextStartTimeRef.current = 0;
 
             // Generate unique session ID
-            const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
             sessionIdRef.current = sessionId;
 
             // Initialize session
+            // 在实时对话模式下，不传递预生成的知识卡片，全部采用实时 AI 生成
             const initResponse = await fetch(getApiUrl('/api/live-session'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -100,7 +135,7 @@ export function useLiveSession(
                     sessionId,
                     action: 'init',
                     script,
-                    knowledgeCards
+                    knowledgeCards: [] // 实时对话模式下不使用预生成知识卡片
                 })
             });
 
@@ -137,11 +172,25 @@ export function useLiveSession(
             eventSource.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
+                    console.log('[useLiveSession] SSE message received, type:', data.type);
                     
                     if (data.type === 'connected') {
                         console.log('Live session connected');
                         hasErrorRef.current = false; // Reset error flag on successful connection
                         setIsConnected(true);
+                        
+                        // Ensure AudioContext is ready for playback
+                        if (!audioContextRef.current) {
+                            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+                        }
+                        if (audioContextRef.current.state === 'suspended') {
+                            audioContextRef.current.resume().then(() => {
+                                console.log('[useLiveSession] AudioContext resumed after connection');
+                            }).catch(err => {
+                                console.error('[useLiveSession] Failed to resume AudioContext:', err);
+                            });
+                        }
+                        
                         onConnect?.();
                         
                         // Send queued audio chunks
@@ -152,7 +201,38 @@ export function useLiveSession(
                             }
                         }
                     } else if (data.type === 'audio') {
-                        playAudioChunk(data.data, data.mimeType);
+                        console.log('[useLiveSession] Audio data received, length:', data.data?.length || 0, 'mimeType:', data.mimeType);
+                        if (data.data) {
+                            // Ensure AudioContext is ready
+                            if (!audioContextRef.current) {
+                                console.log('[useLiveSession] Creating AudioContext for playback');
+                                audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+                            }
+                            playAudioChunk(data.data, data.mimeType);
+                        } else {
+                            console.warn('[useLiveSession] Audio data is empty or missing');
+                        }
+                    } else if (data.type === 'knowledgeCard') {
+                        // Handle knowledge card from AI
+                        console.log('[useLiveSession] Knowledge card received:', data.card);
+                        if (data.card && onKnowledgeCard) {
+                            console.log('[useLiveSession] Calling onKnowledgeCard callback');
+                            onKnowledgeCard(data.card);
+                        } else {
+                            console.warn('[useLiveSession] Knowledge card received but callback not available:', {
+                                hasCard: !!data.card,
+                                hasCallback: !!onKnowledgeCard
+                            });
+                        }
+                    } else if (data.type === 'transcription') {
+                        // Handle transcription (for LCD screen display)
+                        console.log('[useLiveSession] Transcription received:', data.source, data.text);
+                        if (data.source && data.text && onTranscription) {
+                            onTranscription({
+                                source: data.source,
+                                text: data.text
+                            });
+                        }
                     } else if (data.type === 'error') {
                         if (!hasErrorRef.current) {
                             hasErrorRef.current = true;
@@ -349,7 +429,7 @@ export function useLiveSession(
         setIsSpeaking(false);
         
         onDisconnect?.();
-    }, [onDisconnect]);
+    }, [onDisconnect, onKnowledgeCard]);
 
     return {
         connect,

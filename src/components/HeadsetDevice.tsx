@@ -1,27 +1,88 @@
 import { useState, useEffect, useRef } from 'react';
-import { Headphones } from 'lucide-react';
+import { Headphones, Sparkles } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { FlowPlaybackState } from './SupplyDepotApp';
 import { type SceneTag, SCENE_CONFIGS } from '../config/scene-config';
-import { SceneWheel } from './SceneWheel';
 
 interface HeadsetDeviceProps {
   currentSceneTag: SceneTag;
-  onSceneChange: (tag: SceneTag) => void;
-  availableScenes: SceneTag[];
   isPlaying: boolean;
   playbackState: FlowPlaybackState | null;
   audioUrl: string | null;
+  onStartFlow?: () => void;
+  onRecord?: () => void;
+  onActivateBackground?: () => void;
+  currentEnvironmentScene?: SceneTag | null;
+  hasBackgroundEffect?: boolean;
 }
 
-export function HeadsetDevice({ currentSceneTag, onSceneChange, availableScenes, isPlaying, playbackState, audioUrl }: HeadsetDeviceProps) {
+export function HeadsetDevice({ 
+  currentSceneTag, 
+  isPlaying, 
+  playbackState, 
+  audioUrl,
+  onStartFlow,
+  onRecord,
+  onActivateBackground,
+  currentEnvironmentScene = null,
+  hasBackgroundEffect = false
+}: HeadsetDeviceProps) {
+  const promptAudioRef = useRef<HTMLAudioElement>(null);
   // Mock waveform data
   const [bars, setBars] = useState<number[]>(new Array(12).fill(10));
   const [audioText, setAudioText] = useState<{type: 'input' | 'output', text: string} | null>(null);
   const isDeep = currentSceneTag === 'focus' || currentSceneTag === 'qa_memory';
-  const CurrentIcon = SCENE_CONFIGS[currentSceneTag].icon;
   const audioRef = useRef<HTMLAudioElement>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isLongPressing, setIsLongPressing] = useState(false);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Handle button interactions
+  const handlePointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    longPressTimerRef.current = setTimeout(() => {
+        setIsLongPressing(true);
+    }, 500); // 500ms threshold for long press
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    e.preventDefault();
+    if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+    }
+
+    if (isLongPressing) {
+        // Was long pressing, now released -> Stop recording and upload
+        setIsLongPressing(false);
+        handleRecord();
+    } else {
+        // Short press -> Click
+        // 确保重置 isLongPressing 状态（防止状态残留）
+        setIsLongPressing(false);
+        onStartFlow?.();
+    }
+  };
+
+  const handlePointerLeave = (e: React.PointerEvent) => {
+    e.preventDefault();
+    if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+    }
+    setIsLongPressing(false);
+  };
+
+  const handleRecord = () => {
+    if (isRecording) return;
+    
+    setIsRecording(true);
+    onRecord?.();
+    
+    // Reset recording state after a short delay
+    setTimeout(() => setIsRecording(false), 2000);
+  };
   
   // 逐字显示相关状态
   const [displayedText, setDisplayedText] = useState<string>('');
@@ -237,7 +298,7 @@ export function HeadsetDevice({ currentSceneTag, onSceneChange, availableScenes,
   }, [isPlaying, playbackState]);
 
   return (
-    <div className="flex flex-col items-center justify-center h-full p-4 overflow-hidden">
+    <div className="flex flex-col items-center h-full w-full">
        {/* 隐藏的音频元素，用于同步播放（仅单条播放模式） */}
        {playbackState?.playbackMode === 'audio' && audioUrl && (
          <audio
@@ -249,34 +310,91 @@ export function HeadsetDevice({ currentSceneTag, onSceneChange, availableScenes,
          />
        )}
        
+       {/* 提示音频元素 */}
+       <audio ref={promptAudioRef} className="hidden" />
+       
        {/* Headset Visual - Further Reduced */}
-       <div className="relative w-44 h-44 bg-neutral-900 rounded-[2rem] shadow-2xl flex items-center justify-center border-4 border-neutral-800 ring-1 ring-white/10 shrink-0 mb-6">
+       <div className="relative w-72 h-48 bg-neutral-900 rounded-[2rem] shadow-2xl flex items-center justify-center border-4 border-neutral-800 ring-1 ring-white/10 shrink-0 mb-6">
           <div className="absolute top-0 w-20 h-2 bg-neutral-800 rounded-b-xl" /> {/* Band */}
           
           <Headphones size={90} className="text-neutral-700" strokeWidth={1} />
           
           {/* Ear Cups Glow */}
           <div className={clsx(
-              "absolute left-4 w-2 h-16 rounded-full blur-lg transition-all duration-700 opacity-60",
+              "absolute left-16 w-2 h-16 rounded-full blur-lg transition-all duration-700 opacity-60",
               isDeep ? "bg-red-500" : "bg-green-500"
           )} />
           <div className={clsx(
-              "absolute right-4 w-2 h-16 rounded-full blur-lg transition-all duration-700 opacity-60",
+              "absolute right-16 w-2 h-16 rounded-full blur-lg transition-all duration-700 opacity-60",
               isDeep ? "bg-red-500" : "bg-green-500"
           )} />
 
           {/* Status LED */}
           <div className={clsx(
-              "absolute bottom-5 w-1.5 h-1.5 rounded-full transition-colors duration-300 shadow-[0_0_15px_currentColor]",
+              "absolute top-6 right-8 w-1.5 h-1.5 rounded-full transition-colors duration-300 shadow-[0_0_15px_currentColor]",
               isDeep ? "bg-red-400 text-red-400" : "bg-green-400 text-green-400"
           )} />
        </div>
 
        {/* Control Panel - Compact Mode */}
-       <div className="w-full max-w-[280px] bg-white/80 backdrop-blur-xl rounded-3xl p-4 shadow-xl border border-white/40 flex flex-col gap-3">
-           <div className="flex justify-between items-center">
-               <h3 className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest">心流控制 (Flow Control)</h3>
+       <div className="w-full max-w-[320px] flex flex-col gap-4 items-center">
+           {/* GoFlow Button */}
+            <div className="flex flex-col items-center gap-4">
+                 <button 
+                     onPointerDown={handlePointerDown}
+                    onPointerUp={handlePointerUp}
+                    onPointerLeave={handlePointerLeave}
+                    className={clsx(
+                        "group relative flex items-center justify-center w-14 h-14 rounded-full bg-white border-4 border-neutral-200 shadow-xl active:scale-95 transition-all duration-200 hover:border-neutral-300 outline-none select-none",
+                        (isRecording || isLongPressing) && "border-red-400"
+                    )}
+                >
+                    <div className="absolute inset-0 rounded-full border border-neutral-100" />
+                    
+                    {/* Long Press Animation Ring */}
+                    <AnimatePresence>
+                        {isLongPressing && (
+                            <motion.div 
+                                initial={{ scale: 0.8, opacity: 0 }}
+                                animate={{ scale: 1.5, opacity: 0.5 }}
+                                exit={{ scale: 1.8, opacity: 0 }}
+                                transition={{ duration: 1, repeat: Infinity, ease: "easeInOut" }}
+                                className="absolute inset-0 rounded-full bg-red-400/30 z-0"
+                            />
+                        )}
+                    </AnimatePresence>
+
+                    <Headphones size={24} className={clsx(
+                        "text-neutral-600 transition-transform duration-300 z-10",
+                        isRecording ? "text-red-500 animate-pulse" : (isLongPressing ? "scale-90 text-red-500" : "group-hover:scale-110")
+                    )} />
+                </button>
+                <span className="text-[10px] text-neutral-400 font-mono tracking-widest uppercase">
+                    {isRecording ? "RECORDING..." : (isLongPressing ? "RELEASE TO SEND" : "GoFlow")}
+                </span>
            </div>
+
+           {/* Environment Awareness Button */}
+           {onActivateBackground && hasBackgroundEffect && (
+            <div className="flex flex-col items-center gap-2">
+                <button
+                    onClick={() => {
+                      onActivateBackground();
+                    }}
+                    className="group relative flex items-center justify-center w-12 h-12 rounded-full border-2 shadow-lg active:scale-95 transition-all duration-200 outline-none select-none bg-white border-neutral-200 hover:border-neutral-300"
+                >
+                    <Sparkles 
+                        size={18} 
+                        className="transition-colors duration-300 text-neutral-600"
+                    />
+                </button>
+                <span className="text-[9px] text-neutral-400 font-mono tracking-widest uppercase">
+                    {currentEnvironmentScene 
+                      ? SCENE_CONFIGS[currentEnvironmentScene].label 
+                      : "切换环境"}
+                </span>
+            </div>
+          )}
 
            {/* Audio Visualizer */}
            <div className="h-8 flex items-center justify-center gap-1">
@@ -290,7 +408,7 @@ export function HeadsetDevice({ currentSceneTag, onSceneChange, availableScenes,
            </div>
            
            {/* Real-time Text */}
-           <div className="h-8 flex items-center justify-center">
+           <div className="h-8 flex items-center justify-center w-full">
                 <AnimatePresence mode="wait">
                     {audioText && (
                         <motion.div
@@ -316,25 +434,6 @@ export function HeadsetDevice({ currentSceneTag, onSceneChange, availableScenes,
                         </motion.div>
                     )}
                 </AnimatePresence>
-           </div>
-
-           {/* Zone Switch - Compact Integrated */}
-           <div className="bg-white p-3 rounded-2xl border border-neutral-100 shadow-sm flex items-center justify-between gap-2">
-               <div className="flex flex-col gap-1 w-full">
-                   <div className="flex items-center gap-1.5 mb-1">
-                       <CurrentIcon size={16} className={clsx("transition-colors", isDeep ? "text-red-500" : "text-green-500")} />
-                       <span className="text-xs font-bold text-neutral-700">场景切换</span>
-                   </div>
-                   
-                   <div className="w-full flex justify-center">
-                        <SceneWheel 
-                            currentSceneTag={currentSceneTag}
-                            onSceneChange={onSceneChange}
-                            availableScenes={availableScenes}
-                            theme="light"
-                        />
-                   </div>
-               </div>
            </div>
        </div>
     </div>

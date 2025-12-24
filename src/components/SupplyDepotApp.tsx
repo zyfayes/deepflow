@@ -1,5 +1,5 @@
 import { useState, useRef, type Dispatch, type SetStateAction, useEffect, useMemo } from 'react';
-import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Library, Tag, X, AlignLeft, Plus, AlertCircle, Mic2, Square, Copy, Check, Trash2 } from 'lucide-react';
+import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Library, Tag, X, AlignLeft, Plus, AlertCircle, Mic2, Square, Copy, Check, Trash2, Glasses } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLiveSession } from '../hooks/useLiveSession';
@@ -17,6 +17,9 @@ export interface KnowledgeCard {
     content: string;
     tags: string[];
     timestamp: Date;
+    triggerTime?: number; // 在逐字稿中的触发时间（秒）
+    triggerSubtitleIndex?: number; // 关联的字幕索引
+    source?: 'generated' | 'ai_realtime'; // 来源标识
 }
 
 interface RawInput {
@@ -51,6 +54,7 @@ export interface FlowItem {
     };
     isGenerating?: boolean;
     generationProgress?: string;
+    audioUrl?: string; // 直接音频文件路径（用于默认音频等预录制音频）
 }
 
 export interface FlowPlaybackState {
@@ -71,8 +75,13 @@ interface SupplyDepotAppProps {
   onUpdateKnowledgeCards: Dispatch<SetStateAction<KnowledgeCard[]>>;
   currentSceneTag: SceneTag;
   onSceneChange: (tag: SceneTag) => void;
-  onAvailableScenesChange: (scenes: SceneTag[]) => void;
+  onAvailableScenesChange?: (scenes: SceneTag[]) => void;
   onPlaybackStateChange?: (state: FlowPlaybackState) => void;
+  onPrintTrigger?: (card: KnowledgeCard) => void;
+  onTranscription?: (transcription: { source: 'input' | 'output'; text: string }) => void;
+  externalInputFile?: File | null;
+  externalAudioFile?: File | null;
+  onEnvironmentActivate?: (sceneTag: SceneTag) => void; // 环境激活回调，用于获取可播放项和播放方法
 }
 
 export function SupplyDepotApp({ 
@@ -84,12 +93,66 @@ export function SupplyDepotApp({
   currentSceneTag,
   onSceneChange,
   onAvailableScenesChange,
-  onPlaybackStateChange 
+  onPlaybackStateChange,
+  onPrintTrigger,
+  onTranscription,
+  externalInputFile,
+  externalAudioFile
 }: SupplyDepotAppProps) {
   const [rawInputs, setRawInputs] = useState<RawInput[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [currentInputType, setCurrentInputType] = useState<string>('');
+  
+  // Auto-generation ref for external inputs
+  const autoGenerateRef = useRef(false);
+
+  // Handle external input file
+  useEffect(() => {
+    if (externalInputFile) {
+        // Add to raw inputs
+        const newInput: RawInput = {
+            id: Math.random().toString(36).slice(2, 11),
+            type: 'glasses_capture', // specific type for glasses
+            name: externalInputFile.name,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            timestamp: Date.now()
+        };
+        
+        setRawInputs(prev => [newInput, ...prev]);
+        setSelectedFiles(prev => [...prev, externalInputFile]);
+        
+        // Mark for auto-generation
+        autoGenerateRef.current = true;
+        
+        // Auto open input panel if flow list is not empty to show the upload
+        // (If flow list is empty, the input panel is already the main view)
+        if (flowItems.length > 0) {
+            setShowInputPanel(true);
+        }
+    }
+  }, [externalInputFile]);
+
+  // Handle external audio file (e.g. from headset)
+  useEffect(() => {
+    if (externalAudioFile) {
+        const newInput: RawInput = {
+            id: Math.random().toString(36).slice(2, 11),
+            type: 'voice_memo', // specific type for voice memos
+            name: externalAudioFile.name,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            timestamp: Date.now()
+        };
+        
+        setRawInputs(prev => [newInput, ...prev]);
+        setSelectedFiles(prev => [...prev, externalAudioFile]);
+        
+        // Mark for auto-generation
+        autoGenerateRef.current = true;
+        
+        setShowInputPanel(true); // Auto open input panel to show the upload
+    }
+  }, [externalAudioFile]);
   
   const [archivedInputs, setArchivedInputs] = useState<RawInput[]>([]);
   const [flowItems, setFlowItems] = useState<FlowItem[]>([]);
@@ -193,7 +256,11 @@ export function SupplyDepotApp({
       duration: '10:00',
       type: 'meditation',
       tldr: '放松身心，准备入睡',
-      subtitles: [],
+      subtitles: [
+        { time: '00:00', text: 'AI: 欢迎来到睡前冥想。让我们开始放松身心，准备入睡。' },
+        { time: '00:10', text: 'AI: 深呼吸，感受身体的每一个部位逐渐放松。' },
+        { time: '00:20', text: 'AI: 让思绪慢慢平静下来，进入深度放松状态。' }
+      ],
       status: 'ready',
       scenes: ['casual'],
       subject: 'wellness',
@@ -202,7 +269,13 @@ export function SupplyDepotApp({
       sceneTag: 'sleep_meditation',
       isGenerating: true,
       generationProgress: '正在生成中...',
-      playbackProgress: { hasStarted: false }
+      playbackProgress: { hasStarted: false },
+      script: [
+        { speaker: 'AI', text: '欢迎来到睡前冥想。让我们开始放松身心，准备入睡。' },
+        { speaker: 'AI', text: '深呼吸，感受身体的每一个部位逐渐放松。' },
+        { speaker: 'AI', text: '让思绪慢慢平静下来，进入深度放松状态。' }
+      ],
+      audioUrl: '/assets/default-audio/sleep-meditation.m4a'
     },
     {
       id: 'default-2',
@@ -210,7 +283,11 @@ export function SupplyDepotApp({
       duration: '5:00',
       type: 'music',
       tldr: '轻松音乐，放松心情',
-      subtitles: [],
+      subtitles: [
+        { time: '00:00', text: 'AI: 听一首轻松的音乐，放松心情。' },
+        { time: '00:10', text: 'AI: 让优美的旋律带走一天的疲惫。' },
+        { time: '00:20', text: 'AI: 享受这片刻的宁静与美好。' }
+      ],
       status: 'ready',
       scenes: ['casual'],
       subject: 'music',
@@ -219,7 +296,13 @@ export function SupplyDepotApp({
       sceneTag: 'sleep_meditation',
       isGenerating: true,
       generationProgress: '正在生成中...',
-      playbackProgress: { hasStarted: false }
+      playbackProgress: { hasStarted: false },
+      script: [
+        { speaker: 'AI', text: '听一首轻松的音乐，放松心情。' },
+        { speaker: 'AI', text: '让优美的旋律带走一天的疲惫。' },
+        { speaker: 'AI', text: '享受这片刻的宁静与美好。' }
+      ],
+      audioUrl: '/assets/default-audio/relax-music.m4a'
     },
     {
       id: 'default-3',
@@ -227,7 +310,11 @@ export function SupplyDepotApp({
       duration: '15:00',
       type: 'tech',
       tldr: '了解最新科技动态',
-      subtitles: [],
+      subtitles: [
+        { time: '00:00', text: 'AI: 欢迎收听科技时事，了解最新科技动态。' },
+        { time: '00:10', text: 'AI: 今天我们来聊聊最新的科技趋势和创新。' },
+        { time: '00:20', text: 'AI: 让我们一起探索科技世界的精彩。' }
+      ],
       status: 'ready',
       scenes: ['casual'],
       subject: 'tech',
@@ -236,7 +323,13 @@ export function SupplyDepotApp({
       sceneTag: 'home_charge',
       isGenerating: true,
       generationProgress: '正在生成中...',
-      playbackProgress: { hasStarted: false }
+      playbackProgress: { hasStarted: false },
+      script: [
+        { speaker: 'AI', text: '欢迎收听科技时事，了解最新科技动态。' },
+        { speaker: 'AI', text: '今天我们来聊聊最新的科技趋势和创新。' },
+        { speaker: 'AI', text: '让我们一起探索科技世界的精彩。' }
+      ],
+      audioUrl: '/assets/default-audio/tech-news.m4a'
     }
   ];
 
@@ -442,6 +535,7 @@ export function SupplyDepotApp({
   const [audioError, setAudioError] = useState<string | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const playRequestIdRef = useRef(0);
   const [copiedScript, setCopiedScript] = useState(false);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   
@@ -455,10 +549,38 @@ export function SupplyDepotApp({
   // Fullscreen Flow Mode State
 
   const [currentPlayingItem, setCurrentPlayingItem] = useState<FlowItem | null>(null);
+  const [isUserInitiatedPlay, setIsUserInitiatedPlay] = useState(false); // 标记是否是用户手动触发的播放
   const [hasAutoPlayed, setHasAutoPlayed] = useState(false);
 
   // Live Session State
   const [isLiveMode, setIsLiveMode] = useState(false);
+  // Handle real-time knowledge cards from AI
+  const handleRealtimeKnowledgeCard = (card: any) => {
+    console.log('[SupplyDepotApp] handleRealtimeKnowledgeCard called with:', card);
+    
+    const knowledgeCard: KnowledgeCard = {
+      id: Math.random().toString(36).slice(2, 11),
+      title: card.title,
+      content: card.content,
+      tags: card.tags || [],
+      timestamp: new Date(),
+      source: 'ai_realtime'
+    };
+    
+    console.log('[SupplyDepotApp] Created knowledge card:', knowledgeCard);
+    
+    // Add to knowledge cards
+    onUpdateKnowledgeCards(prev => [knowledgeCard, ...prev]);
+    
+    // Trigger print immediately for real-time cards
+    if (onPrintTrigger) {
+      console.log('[SupplyDepotApp] Calling onPrintTrigger with card:', knowledgeCard);
+      onPrintTrigger(knowledgeCard);
+    } else {
+      console.warn('[SupplyDepotApp] onPrintTrigger is not available!');
+    }
+  };
+
   const liveSession = useLiveSession(
       selectedItem?.script?.map(s => `${s.speaker}: ${s.text}`).join('\n') || '',
       selectedItem?.knowledgeCards || [],
@@ -492,7 +614,9 @@ export function SupplyDepotApp({
           // Show user-friendly error message
           alert(errorMessage);
           setIsLiveMode(false);
-      }
+      },
+      handleRealtimeKnowledgeCard,
+      onTranscription
   );
 
   useEffect(() => {
@@ -670,6 +794,41 @@ export function SupplyDepotApp({
     return 0;
   };
 
+  // 从知识卡片内容中提取位置信息并转换为时间戳
+  const parseKnowledgeCardPosition = (
+    card: KnowledgeCard, 
+    subtitles: { time: string; text: string }[]
+  ): { triggerTime: number; triggerSubtitleIndex: number } | null => {
+    // 1. 从 content 中提取 "Source: 00:15" 或 "Source: Page 2" 格式
+    const sourceMatch = card.content.match(/Source:\s*(\d{2}:\d{2})/i);
+    if (sourceMatch) {
+      const timeStr = sourceMatch[1];
+      const triggerTime = parseDurationToSeconds(timeStr);
+      
+      // 2. 找到对应的字幕索引
+      let triggerSubtitleIndex = -1;
+      for (let i = 0; i < subtitles.length; i++) {
+        const subtitleTime = parseDurationToSeconds(subtitles[i].time);
+        if (subtitleTime >= triggerTime) {
+          triggerSubtitleIndex = i > 0 ? i - 1 : 0;
+          break;
+        }
+      }
+      
+      if (triggerSubtitleIndex === -1 && subtitles.length > 0) {
+        triggerSubtitleIndex = subtitles.length - 1;
+      }
+      
+      if (triggerSubtitleIndex >= 0) {
+        return { triggerTime, triggerSubtitleIndex };
+      }
+    }
+    
+    // 如果没有找到时间格式，尝试根据内容匹配字幕
+    // 这里可以根据需要实现更复杂的匹配逻辑
+    return null;
+  };
+
   // 播放进度跟踪：每秒更新播放时长
   useEffect(() => {
     if (selectedItem && selectedItem.status === 'playing' && selectedItem.playbackProgress?.hasStarted) {
@@ -714,8 +873,8 @@ export function SupplyDepotApp({
   // 获取可播放的音频项（排除 interactive 类型）
   const getPlayableItems = (items: FlowItem[], sceneTag?: SceneTag): FlowItem[] => {
     return items.filter(item => 
-      item.script && 
-      item.script.length > 0 && 
+      // 有 script 或者有直接音频 URL 都可以播放
+      (item.script && item.script.length > 0 || item.audioUrl) && 
       item.contentType !== 'interactive' &&
       (!sceneTag || item.sceneTag === sceneTag || (!item.sceneTag && sceneTag === 'default'))
     );
@@ -729,8 +888,13 @@ export function SupplyDepotApp({
   }, [flowItems]);
 
   // Sync available scenes to parent
+  const prevSceneTagsRef = useRef<string>('');
   useEffect(() => {
-    onAvailableScenesChange(sceneTagsArray);
+    const currentTagsStr = JSON.stringify(sceneTagsArray);
+    if (prevSceneTagsRef.current !== currentTagsStr) {
+        onAvailableScenesChange?.(sceneTagsArray);
+        prevSceneTagsRef.current = currentTagsStr;
+    }
   }, [sceneTagsArray, onAvailableScenesChange]);
 
   // Ensure we are on a valid scene (Validation Effect)
@@ -793,7 +957,11 @@ export function SupplyDepotApp({
     };
   }, [currentPlayingItem, currentTime, duration]);
 
+  // Track printed cards to avoid duplicate printing
+  const printedCardsRef = useRef<Set<string>>(new Set());
+
   // Sync playback state - 支持详情页播放和 go flow 模式
+  const prevPlaybackStateRef = useRef<string>('');
   useEffect(() => {
      if (onPlaybackStateChange) {
          // 优先使用 currentPlayingItem，如果没有则使用 selectedItem（详情页播放）
@@ -835,7 +1003,7 @@ export function SupplyDepotApp({
          const finalStartTime = subtitleStartTime !== undefined ? subtitleStartTime : currentSubtitleInfo.startTime;
          const finalEndTime = subtitleEndTime !== undefined ? subtitleEndTime : currentSubtitleInfo.endTime;
          
-         onPlaybackStateChange({
+         const newPlaybackState: FlowPlaybackState = {
              isPlaying: isAudioPlaying,
              currentText: finalText,
              playbackMode: isLiveMode ? 'live' : 'audio',
@@ -843,9 +1011,27 @@ export function SupplyDepotApp({
              duration: duration,
              subtitleStartTime: finalStartTime,
              subtitleEndTime: finalEndTime
-         });
+         };
+
+         const newStateStr = JSON.stringify(newPlaybackState);
+         if (prevPlaybackStateRef.current !== newStateStr) {
+             onPlaybackStateChange(newPlaybackState);
+             prevPlaybackStateRef.current = newStateStr;
+         }
+
+         // Check for knowledge cards that should trigger printing
+         if (activeItem?.knowledgeCards && currentTime !== undefined && onPrintTrigger) {
+           activeItem.knowledgeCards.forEach(card => {
+             if (card.triggerTime !== undefined && 
+                 !printedCardsRef.current.has(card.id) &&
+                 Math.abs(currentTime - card.triggerTime) < 0.5) { // 0.5秒容差
+               onPrintTrigger(card);
+               printedCardsRef.current.add(card.id);
+             }
+           });
+         }
      }
-  }, [isAudioPlaying, currentSubtitle, currentSubtitleInfo, currentPlayingItem, selectedItem, isLiveMode, currentTime, duration, onPlaybackStateChange]);
+  }, [isAudioPlaying, currentSubtitle, currentSubtitleInfo, currentPlayingItem, selectedItem, isLiveMode, currentTime, duration, onPlaybackStateChange, onPrintTrigger]);
 
   // 自动播放逻辑：进入全屏心流页面时自动播放 (Enhanced)
   useEffect(() => {
@@ -873,6 +1059,43 @@ export function SupplyDepotApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFlowing, hasAutoPlayed, sceneTagsArray]); // Removed flowItems dependency to avoid loops, rely on sceneTagsArray which depends on flowItems
 
+  // 场景切换时自动播放（如果已经在 FlowList 模式）
+  useEffect(() => {
+    // 如果用户刚刚手动触发了播放，不自动切换
+    if (isUserInitiatedPlay) {
+      // 延迟重置标志，给音频播放一些时间
+      const timer = setTimeout(() => {
+        setIsUserInitiatedPlay(false);
+      }, 1000); // 1秒后重置
+      return () => clearTimeout(timer);
+    }
+    
+    // 如果当前正在播放音频，不自动切换（避免覆盖用户正在播放的内容）
+    if (isAudioPlaying || isPlayingAudio) {
+      return;
+    }
+    
+    // 如果当前播放项存在且属于当前场景，不自动切换
+    if (currentPlayingItem && currentPlayingItem.sceneTag === currentSceneTag) {
+      return;
+    }
+    
+    if (isFlowing && currentSceneTag && sceneTagsArray.includes(currentSceneTag)) {
+      const playableItems = getPlayableItems(flowItems, currentSceneTag);
+      if (playableItems.length > 0) {
+        const firstItem = playableItems[0];
+        // 如果当前播放的不是这个场景的第一个音频，则切换播放
+        // 或者如果当前播放项属于其他场景，也需要切换
+        if (currentPlayingItem?.id !== firstItem.id || currentPlayingItem?.sceneTag !== currentSceneTag) {
+          setCurrentPlayingItem(firstItem);
+          setSelectedItem(firstItem);
+          handlePlayAudio(firstItem);
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSceneTag, isFlowing]); // 当场景切换且已在 FlowList 模式时触发
+
   // 退出全屏时重置状态
   useEffect(() => {
     if (!isFlowing) {
@@ -893,8 +1116,85 @@ export function SupplyDepotApp({
     }
   }, [selectedItem]);
 
-  const handlePlayAudio = async (item: FlowItem) => {
-    console.log('[PlayAudio] Starting for item:', item.id, item.contentType);
+  const handlePlayAudio = async (item: FlowItem, userInitiated: boolean = false) => {
+    const requestId = ++playRequestIdRef.current;
+    const isActiveRequest = () => playRequestIdRef.current === requestId;
+    console.log('[PlayAudio] Starting for item:', item.id, item.contentType, 'userInitiated:', userInitiated);
+    
+    // 如果是用户手动触发的播放，设置标志
+    if (userInitiated) {
+      setIsUserInitiatedPlay(true);
+    }
+
+    // 立即停止当前音频，避免“串台”（比如上一次 TTS 任务晚到把音频切回去）
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      } catch {
+        // ignore
+      }
+    }
+    
+    // 检查是否有直接音频 URL（用于默认音频等预录制音频）
+    if (item.audioUrl) {
+      console.log('[PlayAudio] Using direct audio URL:', item.audioUrl);
+      
+      // 先更新当前播放项，避免场景切换逻辑干扰
+      setCurrentPlayingItem(item);
+      setSelectedItem(item);
+      
+      // 对于直接音频 URL，不需要 TTS 生成
+      // 但是我们需要设置一个临时标志，防止场景切换逻辑在音频播放前干扰
+      // 使用 isPlayingAudio 作为临时保护（虽然它主要用于 TTS，但这里作为保护机制）
+      setIsPlayingAudio(true);
+      setAudioError(null);
+      setAudioUrl(item.audioUrl);
+      setAudioParts([item.audioUrl]);
+      setCurrentPartIndex(0);
+      setCurrentTime(0);
+      setDuration(0);
+      setTTSProgress(null);
+      
+      // 用户手势内直接触发播放（避免某些浏览器把 useEffect 里的 play() 判为非用户触发而拦截）
+      if (audioRef.current) {
+        try {
+          audioRef.current.src = item.audioUrl;
+          const playPromise = audioRef.current.play();
+          if (playPromise !== undefined) {
+            playPromise.catch((err) => {
+              if (err?.name === 'AbortError') return;
+              console.error('Direct audio play failed:', err);
+            });
+          }
+        } catch (err) {
+          console.error('Direct audio play failed:', err);
+        }
+      }
+      
+      // 设置播放状态
+      setFlowItems(prev => prev.map(i => 
+        i.id === item.id ? { 
+          ...i, 
+          status: 'playing' as const,
+          playbackProgress: {
+            ...i.playbackProgress,
+            hasStarted: true,
+            startedAt: i.playbackProgress?.startedAt || Date.now(),
+            lastPlayedAt: Date.now()
+          }
+        } : i
+      ));
+      
+      // 对于直接音频 URL，audioUrl 的 useEffect 会自动处理播放
+      // 当音频真正开始播放时，onPlay 事件会设置 isAudioPlaying = true
+      // 然后我们可以在 onPlay 中重置 isPlayingAudio = false（因为不需要 TTS）
+      // 这样场景切换逻辑就会依赖 isAudioPlaying 来判断是否正在播放
+      
+      return; // 直接使用音频文件，跳过 TTS 流程
+    }
+    
+    // 原有的 TTS 逻辑
     if (!item.script) return;
     
     // 实时练习类 items 不应该调用 TTS API
@@ -914,10 +1214,12 @@ export function SupplyDepotApp({
     // 检查音频缓存
     try {
       const scriptHash = await generateScriptHash(item.script);
+      if (!isActiveRequest()) return;
       const preset = item.contentType === 'output' ? 'quick_summary' : item.contentType === 'discussion' ? 'deep_analysis' : '';
       
       if (preset) {
         const cachedAudioUrl = await cacheManager.getCachedAudioUrl(scriptHash, preset);
+        if (!isActiveRequest()) return;
         if (cachedAudioUrl) {
           console.log('[Cache] 使用缓存的音频');
           
@@ -930,29 +1232,36 @@ export function SupplyDepotApp({
             setTTSProgress({ stage: 'preparing', message: '准备生成音频...', percentage: 10 });
             
             await new Promise(resolve => setTimeout(resolve, 800));
+            if (!isActiveRequest()) return;
             setTTSProgress({ stage: 'calling-api', message: '调用 TTS API...', percentage: 30 });
             
             await new Promise(resolve => setTimeout(resolve, 1000));
+            if (!isActiveRequest()) return;
             setTTSProgress({ stage: 'processing', message: '处理音频数据...', percentage: 60 });
             
             await new Promise(resolve => setTimeout(resolve, 1000));
+            if (!isActiveRequest()) return;
             setTTSProgress({ stage: 'generating', message: '生成音频中...', percentage: 80 });
             
             await new Promise(resolve => setTimeout(resolve, 800));
+            if (!isActiveRequest()) return;
             setTTSProgress({ stage: 'completed', message: '完成', percentage: 100 });
             
             await new Promise(resolve => setTimeout(resolve, 400));
+            if (!isActiveRequest()) return;
             
             setTTSProgress(null);
           }
           
           // 设置音频（无论是否显示 loading）
+          if (!isActiveRequest()) return;
           setAudioUrl(cachedAudioUrl);
           setAudioParts([cachedAudioUrl]);
           setCurrentPartIndex(0);
           setIsPlayingAudio(false);
           
           // 标记 item 为已开始播放
+          if (!isActiveRequest()) return;
           setFlowItems(prev => prev.map(flowItem => {
             if (flowItem.id === item.id) {
               return {
@@ -976,6 +1285,7 @@ export function SupplyDepotApp({
       // 继续正常流程
     }
     
+    if (!isActiveRequest()) return;
     setTTSProgress({ stage: 'preparing', message: '准备生成音频...', percentage: 0 });
     
     // 标记 item 为已开始播放
@@ -1046,6 +1356,7 @@ export function SupplyDepotApp({
       
       console.log('[SupplyDepot] Creating TTS task with payload:', JSON.stringify(requestPayload).substring(0, 200) + '...');
 
+      if (!isActiveRequest()) return;
       const createResponse = await fetch(getApiUrl('/api/tts'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1053,6 +1364,7 @@ export function SupplyDepotApp({
       });
       
       const createData = await createResponse.json();
+      if (!isActiveRequest()) return;
       
       if (!createResponse.ok) {
         throw new Error(createData.error || 'TTS 任务创建失败');
@@ -1072,6 +1384,7 @@ export function SupplyDepotApp({
               console.warn('[TTS] Warning: Fallback occurred:', createData.fallbackReason);
           }
           result = createData.result;
+          if (!isActiveRequest()) return;
           setTTSProgress(null);
       } else {
           if (!taskId) {
@@ -1086,8 +1399,17 @@ export function SupplyDepotApp({
             return new Promise((resolve, reject) => {
               const poll = async () => {
                 try {
+                  if (!isActiveRequest()) {
+                    reject(new Error('CANCELLED'));
+                    return;
+                  }
                   const statusResponse = await fetch(`${getApiUrl('/api/tts')}?taskId=${taskId}`);
                   const status = await statusResponse.json();
+                  
+                  if (!isActiveRequest()) {
+                    reject(new Error('CANCELLED'));
+                    return;
+                  }
                   
                   // 更新进度显示
                   if (status.progress) {
@@ -1126,18 +1448,27 @@ export function SupplyDepotApp({
           };
           
           // 3. 等待任务完成并设置音频 URL
-          result = await pollTaskStatus();
+          try {
+            result = await pollTaskStatus();
+          } catch (err: any) {
+            if (err?.message === 'CANCELLED' || !isActiveRequest()) {
+              return;
+            }
+            throw err;
+          }
       }
       
       // 缓存音频
       try {
         const scriptHash = await generateScriptHash(item.script);
+        if (!isActiveRequest()) return;
         const preset = isQuickSummary ? 'quick_summary' : isDeepAnalysis ? 'deep_analysis' : '';
         
         if (preset && result.url) {
           // 获取音频 Blob
           const audioResponse = await fetch(result.url.startsWith('data:') ? result.url : `${getApiUrl('/api/proxy-audio')}?url=${encodeURIComponent(result.url)}`);
           const audioBlob = await audioResponse.blob();
+          if (!isActiveRequest()) return;
           
           await cacheManager.cacheAudio(scriptHash, preset, audioBlob, {
             duration: result.duration,
@@ -1150,6 +1481,7 @@ export function SupplyDepotApp({
         // 缓存失败不影响正常流程
       }
       
+      if (!isActiveRequest()) return;
       if (result.url) {
         let proxyUrl = result.url;
         if (!result.url.startsWith('data:')) {
@@ -1180,6 +1512,7 @@ export function SupplyDepotApp({
       
       // 如果API返回了duration，更新FlowItem
       if (result.duration && item) {
+        if (!isActiveRequest()) return;
         const minutes = Math.floor(result.duration / 60);
         const seconds = Math.floor(result.duration % 60);
         const formattedDuration = `${minutes}:${seconds.toString().padStart(2, '0')}`;
@@ -1192,6 +1525,7 @@ export function SupplyDepotApp({
         }));
       }
     } catch (error: any) {
+      if (!isActiveRequest()) return;
       console.error("TTS Error", error);
       setIsPlayingAudio(false);
       setTTSProgress(null);
@@ -1220,7 +1554,14 @@ export function SupplyDepotApp({
             }
           }}
           onError={handleAudioError}
-          onPlay={() => setIsAudioPlaying(true)}
+          onPlay={() => {
+            setIsAudioPlaying(true);
+            // 如果是直接音频 URL（默认音频），重置 isPlayingAudio
+            // 因为直接音频不需要 TTS 生成，isPlayingAudio 只是临时保护
+            if (currentPlayingItem?.audioUrl) {
+              setIsPlayingAudio(false);
+            }
+          }}
           onPause={() => {
             setIsAudioPlaying(false);
             if (selectedItem) {
@@ -1568,7 +1909,12 @@ export function SupplyDepotApp({
                 onUpdateKnowledgeCards(prev => {
                   // 合并知识卡片，避免重复
                   const existingIds = new Set(prev.map((card: KnowledgeCard) => card.id));
-                  const newCards = cachedFlowItem.knowledgeCards!.filter((card: KnowledgeCard) => !existingIds.has(card.id));
+                  const newCards = cachedFlowItem.knowledgeCards!
+                    .filter((card: KnowledgeCard) => !existingIds.has(card.id))
+                    .map(card => ({
+                      ...card,
+                      timestamp: card.timestamp instanceof Date ? card.timestamp : new Date(card.timestamp)
+                    }));
                   return [...prev, ...newCards];
                 });
               }
@@ -1751,24 +2097,36 @@ export function SupplyDepotApp({
         setRawInputs([]);
         setSelectedFiles([]);
 
-        // Process Knowledge Cards
-        let newCards: KnowledgeCard[] = [];
-        if (data.knowledgeCards && Array.isArray(data.knowledgeCards)) {
-            newCards = data.knowledgeCards.map((card: any) => ({
-                id: Math.random().toString(36).slice(2, 11),
-                title: card.title,
-                content: card.content,
-                tags: card.tags || [],
-                timestamp: new Date()
-            }));
-            onUpdateKnowledgeCards(prev => [...newCards, ...prev]);
-        }
-
         // Create Flow Item from Podcast Script
         const subtitles = data.podcastScript ? data.podcastScript.map((line: any, index: number) => ({
             time: `00:${index < 10 ? '0' + index : index}0`, // Fake timing for now
             text: `${line.speaker}: ${line.text}`
         })) : [];
+
+        // Process Knowledge Cards with position parsing
+        let newCards: KnowledgeCard[] = [];
+        if (data.knowledgeCards && Array.isArray(data.knowledgeCards)) {
+            newCards = data.knowledgeCards.map((card: any) => {
+                const knowledgeCard: KnowledgeCard = {
+                    id: Math.random().toString(36).slice(2, 11),
+                    title: card.title,
+                    content: card.content,
+                    tags: card.tags || [],
+                    timestamp: new Date(),
+                    source: 'generated'
+                };
+                
+                // 解析知识卡片位置信息
+                const position = parseKnowledgeCardPosition(knowledgeCard, subtitles);
+                if (position) {
+                    knowledgeCard.triggerTime = position.triggerTime;
+                    knowledgeCard.triggerSubtitleIndex = position.triggerSubtitleIndex;
+                }
+                
+                return knowledgeCard;
+            });
+            onUpdateKnowledgeCards(prev => [...newCards, ...prev]);
+        }
 
         // 获取内容类型和场景标签（从后端返回或推断）
         const contentCategory = data.contentCategory;
@@ -1867,6 +2225,28 @@ export function SupplyDepotApp({
         setTimeout(() => {
           const updateDefaultItems = async () => {
             const defaultItemIds = ['default-1', 'default-2', 'default-3'];
+            const defaultAudioPaths = [
+              '/assets/default-audio/sleep-meditation.m4a',
+              '/assets/default-audio/relax-music.m4a',
+              '/assets/default-audio/tech-news.m4a'
+            ];
+            const defaultScripts = [
+              [
+                { speaker: 'AI', text: '欢迎来到睡前冥想。让我们开始放松身心，准备入睡。' },
+                { speaker: 'AI', text: '深呼吸，感受身体的每一个部位逐渐放松。' },
+                { speaker: 'AI', text: '让思绪慢慢平静下来，进入深度放松状态。' }
+              ],
+              [
+                { speaker: 'AI', text: '听一首轻松的音乐，放松心情。' },
+                { speaker: 'AI', text: '让优美的旋律带走一天的疲惫。' },
+                { speaker: 'AI', text: '享受这片刻的宁静与美好。' }
+              ],
+              [
+                { speaker: 'AI', text: '欢迎收听科技时事，了解最新科技动态。' },
+                { speaker: 'AI', text: '今天我们来聊聊最新的科技趋势和创新。' },
+                { speaker: 'AI', text: '让我们一起探索科技世界的精彩。' }
+              ]
+            ];
             
             for (let i = 0; i < defaultItemIds.length; i++) {
               const delay = i === 0 ? 500 : 800 + Math.random() * 400;
@@ -1884,7 +2264,9 @@ export function SupplyDepotApp({
                     ? { 
                         ...item, 
                         isGenerating: false,
-                        generationProgress: undefined
+                        generationProgress: undefined,
+                        script: defaultScripts[i], // 添加 script 用于字幕显示
+                        audioUrl: defaultAudioPaths[i] // 添加直接音频 URL
                       }
                     : item
                 );
@@ -2165,8 +2547,19 @@ export function SupplyDepotApp({
     );
   }
 
+  // Auto-generate flow list when external files are added
+  useEffect(() => {
+    if (autoGenerateRef.current && selectedFiles.length > 0 && rawInputs.length > 0) {
+        console.log('[AutoGenerate] Triggering generation for external input');
+        generateFlowList();
+        autoGenerateRef.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedFiles, rawInputs]);
+
   return (
     <div className="flex flex-col h-full bg-[#F2F2F7] relative">
+      {renderAudioPlayer()}
       <input 
         type="file" 
         ref={fileInputRef} 
@@ -2271,7 +2664,9 @@ export function SupplyDepotApp({
                     <div key={card.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-col gap-3">
                       <div className="flex justify-between items-start gap-3">
                         <h3 className="font-bold text-slate-800 text-sm line-clamp-2">{card.title}</h3>
-                        <span className="text-[10px] text-slate-400 font-mono shrink-0">{card.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                        <span className="text-[10px] text-slate-400 font-mono shrink-0">
+                          {(card.timestamp instanceof Date ? card.timestamp : new Date(card.timestamp)).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                        </span>
                       </div>
                       <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap bg-slate-50 p-3 rounded-xl border border-slate-100 font-mono">
                         {card.content}
@@ -2364,10 +2759,12 @@ export function SupplyDepotApp({
                       <div key={input.id} className="flex items-center justify-between p-3 rounded-xl bg-white border border-slate-100 shadow-sm">
                         <div className="flex items-center gap-3 min-w-0">
                           <div className={clsx("w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
+                            input.type === 'glasses_capture' ? "bg-purple-100 text-purple-600" :
                             input.type === '图片' ? "bg-blue-100 text-blue-600" :
                             input.type === '文档' ? "bg-orange-100 text-orange-600" :
                             "bg-red-100 text-red-600"
                           )}>
+                            {input.type === 'glasses_capture' && <Glasses size={14} />}
                             {input.type === '图片' && <Camera size={14} />}
                             {input.type === '文档' && <FileText size={14} />}
                             {input.type === '录音' && <Mic size={14} />}
@@ -2605,7 +3002,7 @@ export function SupplyDepotApp({
                               e.stopPropagation();
                               if (!item.isGenerating) {
                                 setSelectedItem(item);
-                                handlePlayAudio(item);
+                                handlePlayAudio(item, true); // 用户手动点击
                               }
                           }}
                           disabled={item.isGenerating}
@@ -2675,7 +3072,16 @@ export function SupplyDepotApp({
                       {/* Close Button Row - Separate Line */}
                       <div className="flex justify-end px-2 pt-2">
                           <button 
-                              onClick={() => setSelectedItem(null)} 
+                              onClick={() => {
+                                setSelectedItem(null);
+                                playRequestIdRef.current += 1;
+                                setIsPlayingAudio(false);
+                                setTTSProgress(null);
+                                if (audioRef.current) {
+                                  audioRef.current.pause();
+                                }
+                                setIsAudioPlaying(false);
+                              }} 
                               className="w-8 h-8 flex items-center justify-center text-white/60 hover:text-white transition-colors"
                           >
                               <X size={18} />
@@ -2753,8 +3159,6 @@ export function SupplyDepotApp({
                               ) : (
                                   audioUrl ? (
                               <div className="w-full flex flex-col">
-                                  {renderAudioPlayer()}
-                                  
                                   {/* Progress Bar */}
                                   <div className="w-full mb-4">
                                     <input
@@ -2879,7 +3283,7 @@ export function SupplyDepotApp({
                               </div>
                           ) : (
                               <button 
-                                  onClick={() => handlePlayAudio(selectedItem)}
+                                  onClick={() => handlePlayAudio(selectedItem, true)} // 用户手动点击
                                   disabled={isPlayingAudio}
                                   className="mt-4 px-8 py-3 bg-white text-slate-900 rounded-full font-bold flex items-center gap-2 hover:scale-105 transition-transform"
                               >

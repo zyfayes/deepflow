@@ -208,6 +208,30 @@ app.post('/api/review', async (req, res): Promise<any> => {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
 
+    // Helper for retry logic
+    const generateWithRetry = async (prompt: string, maxRetries = 3) => {
+        for (let i = 0; i < maxRetries; i++) {
+            try {
+                return await model.generateContent(prompt);
+            } catch (error: any) {
+                const isRateLimit = error.status === 429 || 
+                                  error.message?.includes('429') || 
+                                  error.message?.includes('quota') ||
+                                  error.message?.includes('Too Many Requests');
+                
+                if (i < maxRetries - 1 && isRateLimit) {
+                    // Exponential backoff: 5s, 10s, 15s
+                    const delay = 5000 * (i + 1);
+                    console.log(`[Gemini] Rate limit hit (429). Retrying in ${delay/1000}s... (Attempt ${i + 1}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue;
+                }
+                throw error;
+            }
+        }
+        throw new Error('Max retries exceeded');
+    };
+
     try {
         // 构建复盘 Prompt
         const itemsText = items.map((item: any) => `
@@ -252,7 +276,7 @@ ${knowledgeCardsText}
 
         console.log("Generating review content...");
         
-        const result = await model.generateContent(prompt);
+        const result = await generateWithRetry(prompt);
         const response = await result.response;
         const text = response.text();
 

@@ -1,0 +1,36 @@
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100%" height="100%" fill="white"/>
+  <text x="50" y="50" font-family="Arial" font-size="24" fill="black">3. 如图，正方形 ABCD 的边长是 4，∠DAC 的平分线交 DC 于点 E，</text>
+  <text x="50" y="80" font-family="Arial" font-size="24" fill="black">若点 P、Q 分别是 AD 和 AE 上的动点，则 DQ + PQ 的最小值为 ______。</text>
+  
+  <!-- Geometry Diagram -->
+  <g transform="translate(100, 150)">
+    <!-- Square ABCD -->
+    <rect x="0" y="0" width="200" height="200" fill="none" stroke="black" stroke-width="2"/>
+    <text x="-15" y="-5" font-family="Arial" font-size="20">A</text>
+    <text x="205" y="-5" font-family="Arial" font-size="20">D</text>
+    <text x="205" y="220" font-family="Arial" font-size="20">C</text>
+    <text x="-15" y="220" font-family="Arial" font-size="20">B</text>
+    
+    <!-- Diagonal AC -->
+    <line x1="0" y1="0" x2="200" y2="200" stroke="black" stroke-width="1.5"/>
+    
+    <!-- Line AE (Angle bisector of DAC) -->
+    <!-- Angle DAC is 45 deg. Bisector is 22.5 deg from AD. tan(22.5) approx 0.414 -->
+    <!-- E is on DC. DC is x=200 line. y coordinate of E: 200 * tan(22.5) approx 82.8 -->
+    <line x1="0" y1="0" x2="200" y2="83" stroke="black" stroke-width="1.5"/>
+    <text x="210" y="85" font-family="Arial" font-size="20">E</text>
+    
+    <!-- Point P on AD -->
+    <circle cx="80" cy="0" r="3" fill="black"/>
+    <text x="80" y="-10" font-family="Arial" font-size="18">P</text>
+    
+    <!-- Point Q on AE -->
+    <circle cx="120" cy="50" r="3" fill="black"/>
+    <text x="115" y="70" font-family="Arial" font-size="18">Q</text>
+    
+    <!-- Lines connecting DQ and PQ -->
+    <line x1="200" y1="0" x2="120" y2="50" stroke="black" stroke-width="1" stroke-dasharray="4"/>
+    <line x1="80" y1="0" x2="120" y2="50" stroke="black" stroke-width="1" stroke-dasharray="4"/>
+  </g>
+</svg>
