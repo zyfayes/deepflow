@@ -4,7 +4,11 @@ import {
   callScriptToSpeech,
   checkEpisodeStatus
 } from './listenhub-client.js';
-import { isListenHubConfigured, getListenHubConfig } from './config-helper.js';
+import {
+  isListenHubConfigured,
+  getListenHubConfig,
+  getListenHubConfigDiagnostics
+} from './config-helper.js';
 import { generateGoogleTTS } from './tts-processor.js';
 
 /**
@@ -113,11 +117,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const isDeepAnalysis = preset === 'deep_analysis' || contentType === 'discussion';
     
     let listenHubError: string | undefined;
+    const listenHubDiag = getListenHubConfigDiagnostics();
+    const listenHubApplicable = isQuickSummary || isDeepAnalysis;
 
     // 尝试使用 ListenHub
-    if (isListenHubConfigured() && (isQuickSummary || isDeepAnalysis)) {
+    if (isListenHubConfigured() && listenHubApplicable) {
         try {
-            console.log('[TTS] Attempting ListenHub submission...');
+            console.log('[TTS] Attempting ListenHub submission...', {
+              baseUrl: listenHubDiag.baseUrl,
+              apiKeySource: listenHubDiag.apiKeySource
+            });
             let result;
             
             // asyncMode = true: 只提交任务，不轮询
@@ -148,6 +157,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     provider: 'listenhub'
                 });
             }
+
+            // Should not happen; treat as failure to make fallback reason visible
+            listenHubError = 'ListenHub returned empty response (no episodeId/url)';
             
         } catch (error: any) {
             console.error('[TTS] ListenHub submission failed, falling back to Google TTS:', error);
@@ -156,7 +168,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             listenHubError = error.message || String(error);
         }
     } else {
-        console.log('[TTS] ListenHub not configured or not applicable, using Google TTS');
+        console.log('[TTS] ListenHub skipped, using Google TTS', {
+          applicable: listenHubApplicable,
+          configured: listenHubDiag.apiKeyConfigured,
+          apiKeySource: listenHubDiag.apiKeySource
+        });
     }
     
     // Google TTS Fallback
@@ -170,9 +186,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             result: { urls },
             provider: 'google',
             // 如果是从 ListenHub Fallback 过来的，带上错误原因
-            fallbackReason: typeof listenHubError !== 'undefined' ? listenHubError : (
-                (isListenHubConfigured() && (isQuickSummary || isDeepAnalysis)) ? undefined : 'ListenHub not configured or not applicable'
-            )
+            fallbackReason:
+              typeof listenHubError !== 'undefined'
+                ? listenHubError
+                : isListenHubConfigured() && listenHubApplicable
+                  ? 'ListenHub failed with unknown error'
+                  : 'ListenHub not configured or not applicable'
         });
     } catch (error: any) {
         console.error('[TTS] Google TTS failed:', error);

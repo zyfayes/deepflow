@@ -29,6 +29,18 @@
    ```
 2. 重新部署项目
 
+#### 现象：TTS 总是 fallback 到 Google
+**原因**：ListenHub API Key 未生效，或 ListenHub 调用失败
+
+**解决方案**：
+1. 在 Vercel 项目设置中添加（Production 环境）：
+   ```
+   LISTENHUB_API_KEY=your_listenhub_api_key_here
+   # 或 MARSWAVE_API_KEY=...
+   ```
+2. 重新部署后，在 Functions 日志里查看 `/api/tts` 的输出（会打印 `apiKeySource` 和 fallback 原因，不会打印 Key 值）
+3. 如果日志里是 `fetch failed`，通常是网络/DNS/地域连通性问题；如果是 `401/403`，通常是 Key 无效或权限不足
+
 #### 错误：`fetch failed` 或 `timeout`
 **原因**：无法连接到 Google API
 
@@ -102,4 +114,3 @@ vercel dev
 2. 请求详情（URL、方法、headers）
 3. 环境变量配置（隐藏敏感信息）
 4. 重现步骤
-

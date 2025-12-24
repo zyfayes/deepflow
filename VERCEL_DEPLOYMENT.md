@@ -31,6 +31,13 @@ GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
 ### 可选的环境变量：
+#### ListenHub / MarsWave（用于更高质量 TTS，未配置则自动 fallback 到 Google TTS）
+```
+LISTENHUB_API_KEY=your_listenhub_api_key_here
+# 或者（兼容旧命名）
+MARSWAVE_API_KEY=your_listenhub_api_key_here
+```
+
 ```
 VITE_API_BASE_URL=  # 留空，使用相对路径（推荐）
 VITE_WS_URL=        # WebSocket URL（如果需要）
@@ -90,4 +97,3 @@ VITE_WS_URL=        # WebSocket URL（如果需要）
 - 检查文件大小（最大 50MB）
 - 检查文件格式是否支持
 - 查看 Vercel 函数日志获取详细错误
-
