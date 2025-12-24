@@ -1,5 +1,5 @@
 import { useState, useRef, type Dispatch, type SetStateAction, useEffect, useMemo } from 'react';
-import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Library, Tag, X, AlignLeft, Plus, AlertCircle, Mic2, Square, Copy, Check, Trash2, Glasses } from 'lucide-react';
+import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Library, Tag, X, AlignLeft, Plus, AlertCircle, Mic2, Square, Copy, Check, Trash2, Glasses, Award } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLiveSession } from '../hooks/useLiveSession';
@@ -10,6 +10,9 @@ import { generateFileHash, generateScriptHash } from '../utils/file-utils';
 import Hls from 'hls.js';
 import { type SceneTag, SCENE_CONFIGS } from '../config/scene-config';
 import { SceneWheel } from './SceneWheel';
+import { RewardSystem } from './RewardSystem';
+import { RewardDisplay } from './RewardDisplay';
+import { useRewardSystem } from '../hooks/useRewardSystem';
 
 export interface KnowledgeCard {
     id: string;
@@ -103,9 +106,6 @@ export function SupplyDepotApp({
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [currentInputType, setCurrentInputType] = useState<string>('');
-  
-  // Auto-generation ref for external inputs
-  const autoGenerateRef = useRef(false);
 
   // Handle external input file
   useEffect(() => {
@@ -121,9 +121,6 @@ export function SupplyDepotApp({
         
         setRawInputs(prev => [newInput, ...prev]);
         setSelectedFiles(prev => [...prev, externalInputFile]);
-        
-        // Mark for auto-generation
-        autoGenerateRef.current = true;
         
         // Auto open input panel if flow list is not empty to show the upload
         // (If flow list is empty, the input panel is already the main view)
@@ -147,9 +144,6 @@ export function SupplyDepotApp({
         setRawInputs(prev => [newInput, ...prev]);
         setSelectedFiles(prev => [...prev, externalAudioFile]);
         
-        // Mark for auto-generation
-        autoGenerateRef.current = true;
-        
         setShowInputPanel(true); // Auto open input panel to show the upload
     }
   }, [externalAudioFile]);
@@ -165,7 +159,12 @@ export function SupplyDepotApp({
   const [filterPreset, setFilterPreset] = useState('all');
   const [showInputPanel, setShowInputPanel] = useState(false);
   const [isGardenOpen, setIsGardenOpen] = useState(false);
+  const [isRewardSystemOpen, setIsRewardSystemOpen] = useState(false);
   const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{ show: boolean; fileId: string | null; fileName: string | null }>({ show: false, fileId: null, fileName: null });
+  
+  // 激励体系
+  const rewardSystem = useRewardSystem();
+  const { isSessionActive, sessionStartTime, distractionCount, startSession, endSession, checkDistraction } = rewardSystem;
   const hlsRef = useRef<Hls | null>(null);
   
   // Update readyToFlow based on flowItems status
@@ -712,7 +711,7 @@ export function SupplyDepotApp({
                 }
              }
         });
-      } else if (audioRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+      } else if (isHls && audioRef.current.canPlayType('application/vnd.apple.mpegurl')) {
         // Native HLS support (Safari)
         audioRef.current.src = audioUrl;
         const playPromise = audioRef.current.play();
@@ -1106,8 +1105,27 @@ export function SupplyDepotApp({
         audioRef.current.pause();
         setIsAudioPlaying(false);
       }
+      
+      // 结束激励会话（如果是正常结束）
+      if (isSessionActive && sessionStartTime) {
+        endSession(false, distractionCount);
+      }
     }
-  }, [isFlowing]);
+  }, [isFlowing, onSceneChange, isSessionActive, sessionStartTime, distractionCount, endSession]);
+  
+  // 开始 Flow 时启动激励会话
+  useEffect(() => {
+    if (isFlowing && !isSessionActive) {
+      startSession();
+    }
+  }, [isFlowing, isSessionActive, startSession]);
+  
+  // 监听音频播放状态，检测分心
+  useEffect(() => {
+    if (isSessionActive) {
+      checkDistraction(isAudioPlaying);
+    }
+  }, [isAudioPlaying, isSessionActive, checkDistraction]);
 
   // 同步当前播放项状态
   useEffect(() => {
@@ -2530,12 +2548,22 @@ export function SupplyDepotApp({
         />
         </div>
 
-        {/* Bottom Section: End Button */}
-        <div className="relative z-10 w-full max-w-md flex flex-col justify-end items-center flex-1 pb-8 min-h-[20%]">
+        {/* Bottom Section: Reward Display & End Button */}
+        <div className="relative z-10 w-full max-w-md flex flex-col justify-end items-center flex-1 pb-8 min-h-[20%] gap-4">
+            {/* 激励显示 */}
+            <RewardDisplay 
+              sessionStartTime={rewardSystem.sessionStartTime}
+              isInterrupted={false}
+            />
+            
             <button 
                 onClick={() => {
                   setHasAutoPlayed(false);
                   setCurrentPlayingItem(null);
+                  // 结束激励会话（正常结束）
+                  if (rewardSystem.isSessionActive) {
+                    rewardSystem.endSession(false, rewardSystem.distractionCount);
+                  }
                   onStopFlow();
                 }}
                 className="px-8 py-3 rounded-full bg-white/10 border border-white/20 text-white/80 text-sm font-medium hover:bg-white/20 transition-colors backdrop-blur-md"
@@ -2545,21 +2573,12 @@ export function SupplyDepotApp({
         </div>
       </div>
     );
-  }
-
-  // Auto-generate flow list when external files are added
-  useEffect(() => {
-    if (autoGenerateRef.current && selectedFiles.length > 0 && rawInputs.length > 0) {
-        console.log('[AutoGenerate] Triggering generation for external input');
-        generateFlowList();
-        autoGenerateRef.current = false;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedFiles, rawInputs]);
-
-  return (
-    <div className="flex flex-col h-full bg-[#F2F2F7] relative">
-      {renderAudioPlayer()}
+	  }
+	
+	  return (
+	    <div className="flex flex-col h-full bg-[#F2F2F7] relative">
+	      <RewardSystem isOpen={isRewardSystemOpen} onClose={() => setIsRewardSystemOpen(false)} />
+	      {renderAudioPlayer()}
       <input 
         type="file" 
         ref={fileInputRef} 
@@ -2569,13 +2588,22 @@ export function SupplyDepotApp({
       />
       
       <div className="px-4 pt-4 pb-2 flex items-start gap-3">
-        <button
-          onClick={() => setIsGardenOpen(true)}
-          className="w-10 h-10 rounded-full bg-white border border-slate-200 shadow-sm flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors shrink-0"
-          aria-label="打开花园"
-        >
-          <Library size={18} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsGardenOpen(true)}
+            className="w-10 h-10 rounded-full bg-white border border-slate-200 shadow-sm flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors shrink-0"
+            aria-label="打开花园"
+          >
+            <Library size={18} />
+          </button>
+          <button
+            onClick={() => setIsRewardSystemOpen(true)}
+            className="w-10 h-10 rounded-full bg-white border border-slate-200 shadow-sm flex items-center justify-center text-slate-600 hover:bg-slate-50 transition-colors shrink-0"
+            aria-label="激励体系"
+          >
+            <Award size={18} />
+          </button>
+        </div>
         <div className="flex-1 min-w-0">
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Deep Flow</h1>
           <p className="text-slate-500 text-sm font-medium truncate">准备你的专注素材</p>

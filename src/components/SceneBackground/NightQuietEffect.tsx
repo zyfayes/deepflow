@@ -7,11 +7,10 @@ interface NightQuietEffectProps {
 
 export function NightQuietEffect({ className }: NightQuietEffectProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const sceneRef = useRef<THREE.Scene | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const starsRef = useRef<THREE.Points | null>(null);
+  const sceneRef = useRef<any>(null);
+  const cameraRef = useRef<any>(null);
+  const rendererRef = useRef<any>(null);
+  const starsRef = useRef<any>(null);
   const animationFrameRef = useRef<number | null>(null);
 
   // Rain drops
@@ -160,12 +159,17 @@ export function NightQuietEffect({ className }: NightQuietEffectProps) {
       if (rendererRef.current) {
         rendererRef.current.dispose();
       }
-      if (starsRef.current) {
-        starsRef.current.geometry.dispose();
-        (starsRef.current.material as THREE.Material).dispose();
-      }
-    };
-  }, []);
+	      if (starsRef.current) {
+	        starsRef.current.geometry.dispose();
+	        const material = (starsRef.current as any).material;
+	        if (Array.isArray(material)) {
+	          material.forEach((m) => m?.dispose?.());
+	        } else {
+	          material?.dispose?.();
+	        }
+	      }
+	    };
+	  }, []);
 
   return (
     <div ref={containerRef} className={className} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 0 }}>
@@ -183,4 +187,3 @@ export function NightQuietEffect({ className }: NightQuietEffectProps) {
     </div>
   );
 }
-

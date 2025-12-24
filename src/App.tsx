@@ -5,7 +5,7 @@ import { HeadsetDevice } from './components/HeadsetDevice';
 import { PrinterDevice } from './components/PrinterDevice';
 import { GlassesDevice } from './components/GlassesDevice';
 import { SceneBackground } from './components/SceneBackground';
-import { Headphones, Printer, Glasses } from 'lucide-react';
+import { Headphones, Printer, Glasses, type LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { type SceneTag, SCENE_CONFIGS } from './config/scene-config';
 import { getApiUrl } from './utils/api-config';
@@ -49,7 +49,7 @@ const HardwareCard = ({
 }: { 
   productName: string, 
   slogan: string, 
-  icon: any, 
+  icon: LucideIcon, 
   children: React.ReactNode, 
   isActive: boolean, 
   className?: string 
@@ -408,7 +408,7 @@ function App() {
         isActive={isEnvironmentActive} 
       />
       
-      <div className="flex flex-col w-full max-w-[1800px] mx-auto relative z-20">
+      <div className="flex flex-col w-full max-w-[1600px] mx-auto relative z-20">
         
         {/* Main Header */}
         <header className="mb-12 pl-4 border-l-4 border-neutral-800">
@@ -416,7 +416,7 @@ function App() {
           <p className="text-sm text-neutral-500 mt-2 font-mono tracking-wide">MULTIMODAL HARDWARE INTERFACE</p>
         </header>
 
-        <div className="flex flex-col xl:flex-row gap-16 items-start justify-center">
+        <div className="flex flex-col xl:flex-row gap-12 items-start justify-center">
           
           {/* Device View - Phone (Left Sidebar) */}
           <div className="flex flex-col items-center gap-6 shrink-0 relative">
@@ -444,7 +444,7 @@ function App() {
           </div>
 
           {/* Hardware Grid (Right Side - Equal Width) */}
-          <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-8 w-full">
+          <div className="flex-1 w-full max-w-[1150px] grid grid-cols-1 md:grid-cols-3 gap-6">
             
             {/* Headset */}
             <HardwareCard 
