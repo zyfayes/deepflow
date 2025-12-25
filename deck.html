@@ -14,185 +14,267 @@
         /* 全局重置 */
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
-        /* 配色方案 - 深色科技风 */
+        /* 配色方案 - 极致深色科技风 */
         :root {
-            --bg-body: #0f172a;       /* 深蓝背景 */
-            --bg-card: #1e293b;       /* 卡片背景 */
+            --bg-body: #020617;       /* 极深蓝黑 */
+            --bg-slide: #0f172a;      /* 幻灯片底色 */
             --primary: #38BDF8;       /* 科技蓝 */
+            --primary-glow: rgba(56, 189, 248, 0.4);
             --secondary: #34D399;     /* 成长绿 */
             --accent: #A78BFA;        /* 智慧紫 */
-            --text-main: #F1F5F9;     /* 主要文字 */
-            --text-sub: #94A3B8;      /* 次要文字 */
-            --border: #334155;        /* 边框色 */
+            --text-main: #F8FAFC;     /* 亮白 */
+            --text-sub: #94A3B8;      /* 灰蓝 */
+            --border: rgba(255, 255, 255, 0.1);
+            --card-bg: rgba(255, 255, 255, 0.03);
+            --card-border: rgba(255, 255, 255, 0.06);
         }
 
         body {
             background-color: var(--bg-body);
             color: var(--text-main);
             font-family: 'Noto Sans SC', sans-serif;
-            line-height: 1.6;
+            line-height: 1.7;
             padding: 40px 20px;
             display: flex;
             flex-direction: column;
             align-items: center;
+            background-image: radial-gradient(circle at 50% 0%, #1e293b 0%, var(--bg-body) 80%);
         }
 
-        /* 幻灯片容器 - 响应式设计 */
+        /* 幻灯片容器 */
         .deck-container {
             width: 100%;
-            max-width: 1000px; /* 限制最大宽度，保证阅读体验 */
+            max-width: 1000px;
             margin: 0 auto;
         }
 
-        /* 单页幻灯片样式 */
+        /* 单页幻灯片样式 - 保持尺寸不变 */
         .slide {
-            background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
+            background: linear-gradient(160deg, #1e293b 0%, #0b101e 100%);
             border: 1px solid var(--border);
-            border-radius: 20px;
-            margin-bottom: 50px; /* 页间距 */
-            padding: 50px;
+            border-radius: 24px;
+            margin-bottom: 60px;
+            padding: 56px;
             position: relative;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
             overflow: hidden;
             display: flex;
             flex-direction: column;
-            min-height: 560px; /* 保证最小高度，避免内容挤压 */
+            min-height: 560px;
+        }
+
+        /* 装饰性光晕 */
+        .slide::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.03) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
         }
 
         /* 页码 */
         .page-num {
             position: absolute;
-            top: 20px;
-            right: 20px;
+            top: 24px;
+            right: 24px;
             font-family: 'JetBrains Mono', monospace;
-            color: var(--text-sub);
-            font-size: 14px;
-            border: 1px solid var(--border);
-            padding: 4px 10px;
-            border-radius: 20px;
+            color: rgba(255, 255, 255, 0.3);
+            font-size: 12px;
+            letter-spacing: 1px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 4px 12px;
+            border-radius: 100px;
+            backdrop-filter: blur(4px);
         }
 
         /* 标题样式 */
         h1 {
-            font-size: clamp(36px, 5vw, 64px); /* 响应式字体大小 */
-            font-weight: 900;
-            background: linear-gradient(to right, #fff, var(--primary));
+            font-size: clamp(40px, 5vw, 68px);
+            font-weight: 800;
+            background: linear-gradient(135deg, #fff 0%, #e2e8f0 50%, var(--primary) 100%);
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin-bottom: 20px;
-            line-height: 1.2;
+            margin-bottom: 24px;
+            line-height: 1.1;
+            filter: drop-shadow(0 4px 12px rgba(56, 189, 248, 0.2));
+            position: relative;
+            z-index: 1;
         }
 
         h2 {
             font-size: 32px;
             color: var(--text-main);
-            border-bottom: 2px solid rgba(56, 189, 248, 0.3);
-            padding-bottom: 15px;
-            margin-bottom: 30px;
+            margin-bottom: 40px;
+            font-weight: 600;
+            position: relative;
             display: inline-block;
+            z-index: 1;
+        }
+        
+        h2::after {
+            content: '';
+            display: block;
+            width: 40px;
+            height: 4px;
+            background: linear-gradient(to right, var(--primary), transparent);
+            margin-top: 12px;
+            border-radius: 2px;
         }
 
         h3 {
-            font-size: 22px;
+            font-size: 20px;
             color: var(--primary);
-            margin-bottom: 15px;
-            font-weight: 700;
+            margin-bottom: 12px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
         }
 
         p, li {
-            font-size: 18px;
+            font-size: 16px;
             color: var(--text-sub);
-            margin-bottom: 15px;
+            margin-bottom: 16px;
+            font-weight: 400;
+            position: relative;
+            z-index: 1;
         }
 
-        strong { color: var(--text-main); }
+        strong { color: var(--text-main); font-weight: 600; }
 
         /* 布局工具类 */
         .grid-2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 40px;
+            gap: 48px;
+            height: 100%;
+            position: relative;
+            z-index: 1;
         }
 
         .grid-3 {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 20px;
+            gap: 24px;
+            position: relative;
+            z-index: 1;
         }
 
         /* 移动端适配 */
         @media (max-width: 768px) {
-            .grid-2, .grid-3 {
-                grid-template-columns: 1fr; /* 手机端变为单列 */
-            }
-            .slide {
-                padding: 30px 20px;
-                min-height: auto;
-            }
+            .grid-2, .grid-3 { grid-template-columns: 1fr; }
+            .slide { padding: 32px 24px; min-height: auto; }
             h1 { font-size: 36px; }
             h2 { font-size: 24px; }
         }
 
-        /* 组件样式 */
+        /* 卡片样式 - 玻璃拟态 */
         .card {
-            background: rgba(255, 255, 255, 0.05);
-            padding: 25px;
-            border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            transition: transform 0.2s;
+            background: var(--card-bg);
+            padding: 32px;
+            border-radius: 16px;
+            border: 1px solid var(--card-border);
+            transition: all 0.3s ease;
+            backdrop-filter: blur(12px);
+            position: relative;
+            /* overflow: hidden; Removed to prevent clipping of content and shadows */
         }
+        
         .card:hover {
-            border-color: var(--primary);
-            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.15);
+            background: rgba(255, 255, 255, 0.06);
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px -8px rgba(0, 0, 0, 0.3);
         }
 
         .icon-box {
-            width: 60px;
-            height: 60px;
-            border-radius: 12px;
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 28px;
+            font-size: 24px;
             margin-bottom: 20px;
+            transition: transform 0.3s ease;
         }
-        .bg-primary-dim { background: rgba(56, 189, 248, 0.2); color: var(--primary); }
-        .bg-secondary-dim { background: rgba(52, 211, 153, 0.2); color: var(--secondary); }
-        .bg-accent-dim { background: rgba(167, 139, 250, 0.2); color: var(--accent); }
-        .bg-danger-dim { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+        
+        .card:hover .icon-box {
+            transform: scale(1.1);
+        }
 
-        /* 视觉占位图 (CSS绘制，确保不挂图) */
+        .bg-primary-dim { background: rgba(56, 189, 248, 0.15); color: var(--primary); border: 1px solid rgba(56, 189, 248, 0.2); }
+        .bg-secondary-dim { background: rgba(52, 211, 153, 0.15); color: var(--secondary); border: 1px solid rgba(52, 211, 153, 0.2); }
+        .bg-accent-dim { background: rgba(167, 139, 250, 0.15); color: var(--accent); border: 1px solid rgba(167, 139, 250, 0.2); }
+        .bg-danger-dim { background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); }
+
+        /* 视觉占位图优化 */
         .visual-placeholder {
             width: 100%;
             height: 100%;
             min-height: 250px;
-            background: #111;
-            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 16px;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            border: 2px dashed var(--border);
+            border: 1px dashed var(--border);
             text-align: center;
             padding: 20px;
+            transition: border-color 0.3s;
         }
-        .visual-placeholder i { font-size: 60px; color: var(--text-sub); margin-bottom: 15px; }
+        
+        .visual-placeholder:hover {
+            border-color: var(--primary);
+        }
 
-        /* 时间轴 */
+        /* 时间轴优化 */
         .timeline-item {
             flex: 1;
             text-align: center;
             position: relative;
-            padding: 0 10px;
+            padding: 0 12px;
         }
+        
+        .timeline-item::after {
+            content: '';
+            position: absolute;
+            top: 28px;
+            right: -50%;
+            width: 100%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+            z-index: 0;
+        }
+        
+        .timeline-item:last-child::after { display: none; }
+
         .timeline-container {
             display: flex;
             justify-content: space-between;
-            margin-top: 40px;
+            margin-top: 48px;
             flex-wrap: wrap;
-            gap: 20px;
+            gap: 24px;
         }
 
+        /* 列表优化 */
+        ul { list-style: none; }
+        ul li {
+            position: relative;
+            padding-left: 24px;
+        }
+        ul li::before {
+            content: '•';
+            color: var(--primary);
+            position: absolute;
+            left: 0;
+            font-size: 20px;
+            line-height: 1.5;
+        }
     </style>
 </head>
 <body>
@@ -200,11 +282,10 @@
 <div class="deck-container">
 
     <!-- 封面页 -->
-    <div class="slide" id="p1">
+    <div class="slide" id="p1" style="justify-content: center;">
         <div class="page-num">01 / 18</div>
-        <div class="grid-2" style="align-items: center; height: 100%;">
+        <div class="grid-2" style="align-items: center; height: auto;">
             <div>
-                <p style="color: var(--secondary); font-family: 'JetBrains Mono'; letter-spacing: 2px; margin-bottom: 10px;">HACKATHON 2024 ENTRY</p>
                 <h1>DeepFlow<br>心流学习站</h1>
                 <p style="font-size: 24px; color: var(--text-main); margin-bottom: 30px;">听见你的专注力 · 捕捉知识 · 进入心流</p>
                 <div style="display: flex; gap: 15px;">
@@ -212,9 +293,8 @@
                     <span style="padding: 8px 16px; background: var(--bg-card); border: 1px solid var(--secondary); color: var(--secondary); border-radius: 20px;">AI Native</span>
                 </div>
             </div>
-            <div class="visual-placeholder" style="background: radial-gradient(circle, #1e293b, #000);">
-                <i class="fa-solid fa-layer-group" style="color: var(--primary);"></i>
-                <p style="color: #fff;">DeepFlow 全场景终端</p>
+            <div style="display: flex; align-items: center; justify-content: center; height: 100%;">
+                <img src="/assets/9f4dae8e4f93a3462dc3f7ec0431e137.png" alt="DeepFlow 全场景终端" style="max-width: 100%; max-height: 350px; object-fit: contain;">
             </div>
         </div>
     </div>
@@ -312,11 +392,8 @@
                     </li>
                 </ul>
             </div>
-            <div class="visual-placeholder" style="background: #0f172a;">
-                <i class="fa-solid fa-mobile-screen" style="font-size: 80px; color: #333;"></i>
-                <div style="margin-top: -40px; background: var(--bg-card); padding: 10px 20px; border-radius: 20px; border: 1px solid var(--primary); z-index: 2; position: relative;">
-                    <i class="fa-solid fa-leaf" style="color: var(--secondary);"></i> 专注中...
-                </div>
+            <div class="visual-placeholder" style="background: transparent; border: none; padding: 0; display: flex; align-items: center; justify-content: center;">
+                <img src="/assets/goflowscreen.png" alt="Immersive Lock Screen" style="max-height: 450px; width: auto; object-fit: contain; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1);">
             </div>
         </div>
     </div>
@@ -327,24 +404,24 @@
         <h2>4. 硬件矩阵：感官三剑客</h2>
         <div class="grid-3">
             <div class="card" style="text-align: center;">
-                <div class="visual-placeholder" style="min-height: 150px; margin-bottom: 20px;">
-                    <i class="fa-solid fa-headphones-simple"></i>
+                <div class="visual-placeholder" style="height: auto; min-height: 150px; margin-bottom: 30px; background: transparent; border: none; padding: 0; display: flex; align-items: center; justify-content: center;">
+                    <img src="/assets/hardware/headset1.png" alt="Focus Headset" style="max-width: 100%; max-height: 220px; object-fit: contain;">
                 </div>
                 <h3>听觉终端</h3>
                 <p style="color: var(--primary); font-weight: bold;">Focus / Spark</p>
                 <p style="font-size: 14px;">主动降噪、VAD 语音交互、随身“闪录”。</p>
             </div>
             <div class="card" style="text-align: center;">
-                <div class="visual-placeholder" style="min-height: 150px; margin-bottom: 20px;">
-                    <i class="fa-solid fa-glasses"></i>
+                <div class="visual-placeholder" style="height: auto; min-height: 150px; margin-bottom: 30px; background: transparent; border: none; padding: 0; display: flex; align-items: center; justify-content: center;">
+                    <img src="/assets/hardware/glass1.png" alt="Vision Glasses" style="max-width: 100%; max-height: 220px; object-fit: contain;">
                 </div>
                 <h3>视觉终端</h3>
                 <p style="color: var(--primary); font-weight: bold;">Vision</p>
                 <p style="font-size: 14px;">注视即捕捉、OCR 识别、AR 极简提示。</p>
             </div>
             <div class="card" style="text-align: center;">
-                <div class="visual-placeholder" style="min-height: 150px; margin-bottom: 20px;">
-                    <i class="fa-solid fa-print"></i>
+                <div class="visual-placeholder" style="height: auto; min-height: 150px; margin-bottom: 30px; background: transparent; border: none; padding: 0; display: flex; align-items: center; justify-content: center;">
+                    <img src="/assets/hardware/printer2.png" alt="Note Printer" style="max-width: 100%; max-height: 220px; object-fit: contain;">
                 </div>
                 <h3>物理终端</h3>
                 <p style="color: var(--primary); font-weight: bold;">Note</p>
@@ -369,9 +446,9 @@
                     <p style="font-size: 14px; margin: 5px 0 0;">通勤场景。Always-on Mic 配合“闪录键”，灵感、课堂重点不丢失。</p>
                 </div>
             </div>
-            <div class="visual-placeholder">
-                <i class="fa-solid fa-ear-listen" style="font-size: 80px;"></i>
-                <p style="margin-top: 20px;">VAD 语音活动检测阵列</p>
+            <div class="visual-placeholder" style="background: transparent; border: none; padding: 0; display: flex; align-items: center; justify-content: center; gap: 20px;">
+                <img src="/assets/hardware/headset1.png" alt="Focus Headset" style="max-width: 48%; max-height: 300px; object-fit: contain; filter: drop-shadow(0 10px 20px rgba(0,0,0,0.3));">
+                <img src="/assets/hardware/headset5.png" alt="Spark Headset" style="max-width: 48%; max-height: 300px; object-fit: contain; filter: drop-shadow(0 10px 20px rgba(0,0,0,0.3));">
             </div>
         </div>
     </div>
@@ -381,9 +458,8 @@
         <div class="page-num">08 / 18</div>
         <h2>4.2 视觉终端：DeepFlow Vision</h2>
         <div class="grid-2">
-            <div class="visual-placeholder">
-                <i class="fa-solid fa-eye" style="font-size: 80px;"></i>
-                <p style="margin-top: 20px;">AR 极简 HUD 显示</p>
+            <div class="visual-placeholder" style="background: transparent; border: none; padding: 0; display: flex; align-items: center; justify-content: center;">
+                <img src="/assets/hardware/glass1.png" alt="Vision Glasses" style="max-width: 100%; max-height: 350px; object-fit: contain; filter: drop-shadow(0 10px 20px rgba(0,0,0,0.3));">
             </div>
             <div>
                 <h3>视觉捕捉与 AR 隐形提示器</h3>
@@ -428,9 +504,8 @@
                     </div>
                 </div>
             </div>
-            <div class="visual-placeholder">
-                <i class="fa-solid fa-print" style="font-size: 80px;"></i>
-                <p style="margin-top: 20px;">热敏打印技术</p>
+            <div class="visual-placeholder" style="background: transparent; border: none; padding: 0; display: flex; align-items: center; justify-content: center;">
+                <img src="/assets/hardware/printer2.png" alt="Note Printer" style="max-width: 100%; max-height: 350px; object-fit: contain; filter: drop-shadow(0 10px 20px rgba(0,0,0,0.3));">
             </div>
         </div>
     </div>
@@ -471,9 +546,8 @@
         <div class="page-num">11 / 18</div>
         <h2>5.1 Go Flow 模式：顺人性的游戏化</h2>
         <div class="grid-2">
-            <div class="visual-placeholder" style="background: #000;">
-                <i class="fa-solid fa-gamepad" style="font-size: 80px; color: var(--accent);"></i>
-                <p style="color: var(--secondary); margin-top: 10px;">Level Up!</p>
+            <div class="visual-placeholder" style="background: transparent; border: none; padding: 0; display: flex; align-items: center; justify-content: center;">
+                <img src="/assets/quest.png" alt="Level Up" style="max-width: 100%; max-height: 350px; object-fit: contain; filter: drop-shadow(0 10px 20px rgba(0,0,0,0.5));">
             </div>
             <div>
                 <h3>"专注即滋养，打断即枯萎"</h3>
@@ -656,14 +730,10 @@
         <h1 style="font-size: 64px; margin-bottom: 20px;">从被动自律<br>到主动沉浸</h1>
         <p style="font-size: 32px; color: var(--primary); margin-bottom: 50px;">DeepFlow</p>
         
-        <div style="display: flex; gap: 40px; margin-top: 40px;">
+        <div style="display: flex; gap: 40px; margin-top: 40px; justify-content: center;">
             <div>
                 <i class="fa-solid fa-globe" style="font-size: 24px; color: var(--text-sub);"></i>
                 <p>www.deepflow.live</p>
-            </div>
-            <div>
-                <i class="fa-solid fa-envelope" style="font-size: 24px; color: var(--text-sub);"></i>
-                <p>contact@deepflow.live</p>
             </div>
         </div>
     </div>
