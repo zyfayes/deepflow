@@ -333,7 +333,8 @@ export function SupplyDepotApp({
   ];
 
 
-  // 复盘上下文收集函数
+  // 复盘上下文收集函数 (暂时屏蔽)
+  /*
   interface ReviewContext {
     items: Array<{
       id: string;
@@ -486,6 +487,7 @@ export function SupplyDepotApp({
       alert('复盘生成失败，请稍后重试');
     }
   };
+  */
 
   useEffect(() => {
       const p = PRESETS[genPreset];
@@ -864,7 +866,7 @@ export function SupplyDepotApp({
     
     if (playedCount >= 5 && !hasTriggeredReview) {
       // 触发复盘流程
-      triggerDailyReview();
+      // triggerDailyReview(); // 暂时屏蔽每日复盘功能
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flowItems, hasTriggeredReview]);
@@ -881,7 +883,8 @@ export function SupplyDepotApp({
 
   // 获取所有场景类型的数组 (Filter scenes that have content)
   const sceneTagsArray = useMemo(() => {
-    const allTags: SceneTag[] = ['commute', 'home_charge', 'focus', 'sleep_meditation', 'qa_memory', 'daily_review', 'default'];
+    // 暂时屏蔽 'daily_review'
+    const allTags: SceneTag[] = ['commute', 'home_charge', 'focus', 'sleep_meditation', 'qa_memory', /* 'daily_review', */ 'default'];
     // Only include scenes that have playable items
     return allTags.filter(tag => getPlayableItems(flowItems, tag).length > 0);
   }, [flowItems]);
