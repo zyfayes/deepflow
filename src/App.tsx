@@ -5,7 +5,7 @@ import { HeadsetDevice } from './components/HeadsetDevice';
 import { PrinterDevice } from './components/PrinterDevice';
 import { GlassesDevice } from './components/GlassesDevice';
 import { SceneBackground } from './components/SceneBackground';
-import { Headphones, Printer, Glasses, type LucideIcon } from 'lucide-react';
+import { Headphones, Printer, Glasses, Presentation, type LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { type SceneTag, SCENE_CONFIGS } from './config/scene-config';
 import { getApiUrl } from './utils/api-config';
@@ -411,9 +411,21 @@ function App() {
       <div className="flex flex-col w-full max-w-[1600px] mx-auto relative z-20">
         
         {/* Main Header */}
-        <header className="mb-12 pl-4 border-l-4 border-neutral-800">
-          <h1 className="text-3xl font-bold text-neutral-800 tracking-tight">GoFlow Station</h1>
-          <p className="text-sm text-neutral-500 mt-2 font-mono tracking-wide">MULTIMODAL HARDWARE INTERFACE</p>
+        <header className="mb-12 flex items-start justify-between">
+          <div className="pl-4 border-l-4 border-neutral-800">
+            <h1 className="text-3xl font-bold text-neutral-800 tracking-tight">GoFlow Station</h1>
+            <p className="text-sm text-neutral-500 mt-2 font-mono tracking-wide">MULTIMODAL HARDWARE INTERFACE</p>
+          </div>
+          
+          <a 
+            href="/deck.html" 
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 px-5 py-2.5 bg-white hover:bg-neutral-50 rounded-full border border-neutral-200 shadow-sm hover:shadow transition-all group"
+          >
+            <Presentation size={18} className="text-neutral-500 group-hover:text-indigo-600 transition-colors" />
+            <span className="text-sm font-medium text-neutral-600 group-hover:text-neutral-900">Project Deck</span>
+          </a>
         </header>
 
         <div className="flex flex-col xl:flex-row gap-12 items-start justify-center">
