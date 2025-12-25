@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { Headphones, Sparkles } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Headphones, Sparkles, Maximize2, X } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { FlowPlaybackState } from './SupplyDepotApp';
@@ -36,6 +37,8 @@ export function HeadsetDevice({
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isLongPressing, setIsLongPressing] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Handle button interactions
@@ -314,7 +317,12 @@ export function HeadsetDevice({
        <audio ref={promptAudioRef} className="hidden" />
        
        {/* Headset Visual - Further Reduced */}
-       <div className="relative w-full max-w-[18rem] aspect-[3/2] h-auto bg-neutral-900 rounded-[2rem] shadow-2xl flex items-center justify-center border-4 border-neutral-800 ring-1 ring-white/10 mb-6">
+       <div 
+          className="relative w-full max-w-[18rem] aspect-[3/2] h-auto bg-neutral-900 rounded-[2rem] shadow-2xl flex items-center justify-center border-4 border-neutral-800 ring-1 ring-white/10 mb-6 group cursor-pointer overflow-hidden"
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          onClick={() => setShowModal(true)}
+       >
           <div className="absolute top-0 w-20 h-2 bg-neutral-800 rounded-b-xl" /> {/* Band */}
           
           <Headphones size={90} className="text-neutral-700" strokeWidth={1} />
@@ -334,7 +342,62 @@ export function HeadsetDevice({
               "absolute top-6 right-8 w-1.5 h-1.5 rounded-full transition-colors duration-300 shadow-[0_0_15px_currentColor]",
               isDeep ? "bg-red-400 text-red-400" : "bg-green-400 text-green-400"
           )} />
+
+          {/* Expand Button Overlay */}
+          <AnimatePresence>
+            {isHovered && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-20"
+              >
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowModal(true);
+                  }}
+                  className="bg-white/10 hover:bg-white/20 text-white p-3 rounded-full backdrop-blur-md transition-all duration-200 transform hover:scale-110 border border-white/20 shadow-lg"
+                  title="查看实物图"
+                >
+                  <Maximize2 size={24} />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
        </div>
+
+       {/* Full Image Modal - Portal to Body */}
+       {createPortal(
+         <AnimatePresence>
+          {showModal && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-sm p-8"
+              onClick={() => setShowModal(false)}
+            >
+              <button
+                className="absolute top-6 right-6 text-white/70 hover:text-white transition-colors bg-white/10 p-2 rounded-full z-50"
+                onClick={() => setShowModal(false)}
+              >
+                <X size={24} />
+              </button>
+              <motion.img
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                src="/assets/hardware/image1.png"
+                alt="Headset Detail"
+                className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              />
+            </motion.div>
+          )}
+         </AnimatePresence>,
+         document.body
+       )}
 
        {/* Control Panel - Compact Mode */}
        <div className="w-full max-w-[320px] flex flex-col gap-4 items-center">
