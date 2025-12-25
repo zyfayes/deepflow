@@ -1,7 +1,13 @@
-import { Glasses, Camera, Loader2, ExternalLink } from 'lucide-react';
+import { Glasses, Camera, Loader2, ExternalLink, X, ChevronLeft, ChevronRight, Maximize2 } from 'lucide-react';
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
+
+const GLASSES_IMAGES = [
+  '/assets/hardware/glass1.png',
+  '/assets/hardware/glass2.png'
+];
 
 interface GlassesDeviceProps {
   onCapture?: () => void;
@@ -14,6 +20,9 @@ export function GlassesDevice({ onCapture, nextImageSrc }: GlassesDeviceProps) {
   const [showFlashThumbnail, setShowFlashThumbnail] = useState(false);
   const [recentPhotos, setRecentPhotos] = useState<string[]>([]);
   const [tempCaptureImage, setTempCaptureImage] = useState<string | null>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [isHovered, setIsHovered] = useState(false);
 
   const handleCapture = () => {
     if (isCapturing) return;
@@ -54,7 +63,12 @@ export function GlassesDevice({ onCapture, nextImageSrc }: GlassesDeviceProps) {
   return (
     <div className="flex flex-col items-center w-full h-full relative">
         {/* Glasses Visual */}
-        <div className="relative w-full max-w-[18rem] aspect-[3/2] h-auto bg-neutral-900 rounded-[2rem] shadow-2xl flex items-center justify-center border-4 border-neutral-800 ring-1 ring-white/10 mb-6 overflow-hidden">
+        <div 
+            className="relative w-full max-w-[18rem] aspect-[3/2] h-auto bg-neutral-900 rounded-[2rem] shadow-2xl flex items-center justify-center border-4 border-neutral-800 ring-1 ring-white/10 mb-6 overflow-hidden cursor-pointer group"
+            onMouseEnter={() => setIsHovered(true)}
+            onMouseLeave={() => setIsHovered(false)}
+            onClick={() => setShowModal(true)}
+        >
             {/* Flash Overlay */}
             <AnimatePresence>
                 {isCapturing && (
@@ -109,7 +123,119 @@ export function GlassesDevice({ onCapture, nextImageSrc }: GlassesDeviceProps) {
                     ) : null}
                  </AnimatePresence>
             </div>
+
+            {/* Expand Button Overlay */}
+            <AnimatePresence>
+            {isHovered && !isCapturing && (
+                <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-20"
+                >
+                <button
+                    onClick={(e) => {
+                    e.stopPropagation();
+                    setShowModal(true);
+                    }}
+                    className="bg-white/10 hover:bg-white/20 text-white p-3 rounded-full backdrop-blur-md transition-all duration-200 transform hover:scale-110 border border-white/20 shadow-lg"
+                    title="查看实物图"
+                >
+                    <Maximize2 size={24} />
+                </button>
+                </motion.div>
+            )}
+            </AnimatePresence>
         </div>
+
+        {/* Full Image Modal - Portal to Body */}
+        {createPortal(
+            <AnimatePresence>
+            {showModal && (
+                <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-black/90 backdrop-blur-sm p-8"
+                onClick={() => setShowModal(false)}
+                >
+                {/* Close Button */}
+                <button
+                    className="absolute top-6 right-6 text-white/70 hover:text-white transition-colors bg-white/10 p-2 rounded-full z-50 hover:bg-white/20"
+                    onClick={() => setShowModal(false)}
+                >
+                    <X size={24} />
+                </button>
+
+                {/* Main Content Area */}
+                <div className="flex-1 w-full max-w-6xl flex items-center justify-between gap-4 relative" onClick={(e) => e.stopPropagation()}>
+                    
+                    {/* Previous Button */}
+                    <button 
+                    className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-all transform hover:scale-110"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        setCurrentImageIndex(prev => (prev === 0 ? GLASSES_IMAGES.length - 1 : prev - 1));
+                    }}
+                    >
+                    <ChevronLeft size={32} />
+                    </button>
+
+                    {/* Main Image */}
+                    <div className="flex-1 flex items-center justify-center h-full max-h-[70vh] relative overflow-hidden px-4">
+                    <AnimatePresence mode="wait">
+                        <motion.img
+                        key={currentImageIndex}
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: -20 }}
+                        transition={{ duration: 0.3 }}
+                        src={GLASSES_IMAGES[currentImageIndex]}
+                        alt={`Glasses View ${currentImageIndex + 1}`}
+                        className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl"
+                        draggable={false}
+                        />
+                    </AnimatePresence>
+                    </div>
+
+                    {/* Next Button */}
+                    <button 
+                    className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-all transform hover:scale-110"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        setCurrentImageIndex(prev => (prev === GLASSES_IMAGES.length - 1 ? 0 : prev + 1));
+                    }}
+                    >
+                    <ChevronRight size={32} />
+                    </button>
+                </div>
+
+                {/* Thumbnails */}
+                <div className="h-24 mt-6 flex items-center justify-center gap-4 w-full overflow-x-auto p-2" onClick={(e) => e.stopPropagation()}>
+                    {GLASSES_IMAGES.map((img, idx) => (
+                    <button
+                        key={idx}
+                        onClick={() => setCurrentImageIndex(idx)}
+                        className={clsx(
+                        "relative h-20 w-32 rounded-lg overflow-hidden transition-all duration-300 border-2 bg-black/50",
+                        currentImageIndex === idx 
+                            ? "border-white scale-110 shadow-lg shadow-white/20" 
+                            : "border-transparent opacity-50 hover:opacity-100 hover:scale-105 border-white/10"
+                        )}
+                    >
+                        <img 
+                        src={img} 
+                        alt={`Thumbnail ${idx + 1}`}
+                        className="w-full h-full object-contain p-1"
+                        />
+                    </button>
+                    ))}
+                </div>
+                </motion.div>
+            )}
+            </AnimatePresence>,
+            document.body
+        )}
 
         {/* Flash Thumbnail Overlay (Centered on screen) */}
         <AnimatePresence>

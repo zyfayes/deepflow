@@ -1,8 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Headphones, Sparkles, Maximize2, X } from 'lucide-react';
+import { Headphones, Sparkles, Maximize2, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
+
+const HEADSET_IMAGES = [
+  '/assets/hardware/headset1.png',
+  '/assets/hardware/headset2.png',
+  '/assets/hardware/headset3.png',
+  '/assets/hardware/headset4.png',
+  '/assets/hardware/headset5.png'
+];
 import type { FlowPlaybackState } from './SupplyDepotApp';
 import { type SceneTag, SCENE_CONFIGS } from '../config/scene-config';
 
@@ -39,6 +47,7 @@ export function HeadsetDevice({
   const [isLongPressing, setIsLongPressing] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Handle button interactions
@@ -375,24 +384,81 @@ export function HeadsetDevice({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-sm p-8"
+              className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-black/90 backdrop-blur-sm p-8"
               onClick={() => setShowModal(false)}
             >
+              {/* Close Button */}
               <button
-                className="absolute top-6 right-6 text-white/70 hover:text-white transition-colors bg-white/10 p-2 rounded-full z-50"
+                className="absolute top-6 right-6 text-white/70 hover:text-white transition-colors bg-white/10 p-2 rounded-full z-50 hover:bg-white/20"
                 onClick={() => setShowModal(false)}
               >
                 <X size={24} />
               </button>
-              <motion.img
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.9, opacity: 0 }}
-                src="/assets/hardware/image1.png"
-                alt="Headset Detail"
-                className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl"
-                onClick={(e) => e.stopPropagation()}
-              />
+
+              {/* Main Content Area */}
+              <div className="flex-1 w-full max-w-6xl flex items-center justify-between gap-4 relative" onClick={(e) => e.stopPropagation()}>
+                
+                {/* Previous Button */}
+                <button 
+                  className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-all transform hover:scale-110"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCurrentImageIndex(prev => (prev === 0 ? HEADSET_IMAGES.length - 1 : prev - 1));
+                  }}
+                >
+                  <ChevronLeft size={32} />
+                </button>
+
+                {/* Main Image */}
+                <div className="flex-1 flex items-center justify-center h-full max-h-[70vh] relative overflow-hidden px-4">
+                  <AnimatePresence mode="wait">
+                    <motion.img
+                      key={currentImageIndex}
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      transition={{ duration: 0.3 }}
+                      src={HEADSET_IMAGES[currentImageIndex]}
+                      alt={`Headset View ${currentImageIndex + 1}`}
+                      className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl"
+                      draggable={false}
+                    />
+                  </AnimatePresence>
+                </div>
+
+                {/* Next Button */}
+                <button 
+                  className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white transition-all transform hover:scale-110"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCurrentImageIndex(prev => (prev === HEADSET_IMAGES.length - 1 ? 0 : prev + 1));
+                  }}
+                >
+                  <ChevronRight size={32} />
+                </button>
+              </div>
+
+              {/* Thumbnails */}
+              <div className="h-24 mt-6 flex items-center justify-center gap-4 w-full overflow-x-auto p-2" onClick={(e) => e.stopPropagation()}>
+                {HEADSET_IMAGES.map((img, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setCurrentImageIndex(idx)}
+                    className={clsx(
+                      "relative h-20 w-32 rounded-lg overflow-hidden transition-all duration-300 border-2 bg-black/50",
+                      currentImageIndex === idx 
+                        ? "border-white scale-110 shadow-lg shadow-white/20" 
+                        : "border-transparent opacity-50 hover:opacity-100 hover:scale-105 border-white/10"
+                    )}
+                  >
+                    <img 
+                      src={img} 
+                      alt={`Thumbnail ${idx + 1}`}
+                      className="w-full h-full object-contain p-1"
+                    />
+                  </button>
+                ))}
+              </div>
             </motion.div>
           )}
          </AnimatePresence>,
