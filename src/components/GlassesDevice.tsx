@@ -54,7 +54,7 @@ export function GlassesDevice({ onCapture, nextImageSrc }: GlassesDeviceProps) {
   return (
     <div className="flex flex-col items-center w-full h-full relative">
         {/* Glasses Visual */}
-        <div className="relative w-72 h-48 bg-neutral-900 rounded-[2rem] shadow-2xl flex items-center justify-center border-4 border-neutral-800 ring-1 ring-white/10 shrink-0 mb-6 overflow-hidden">
+        <div className="relative w-full max-w-[18rem] aspect-[3/2] h-auto bg-neutral-900 rounded-[2rem] shadow-2xl flex items-center justify-center border-4 border-neutral-800 ring-1 ring-white/10 mb-6 overflow-hidden">
             {/* Flash Overlay */}
             <AnimatePresence>
                 {isCapturing && (

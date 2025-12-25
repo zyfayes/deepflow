@@ -314,7 +314,7 @@ export function HeadsetDevice({
        <audio ref={promptAudioRef} className="hidden" />
        
        {/* Headset Visual - Further Reduced */}
-       <div className="relative w-72 h-48 bg-neutral-900 rounded-[2rem] shadow-2xl flex items-center justify-center border-4 border-neutral-800 ring-1 ring-white/10 shrink-0 mb-6">
+       <div className="relative w-full max-w-[18rem] aspect-[3/2] h-auto bg-neutral-900 rounded-[2rem] shadow-2xl flex items-center justify-center border-4 border-neutral-800 ring-1 ring-white/10 mb-6">
           <div className="absolute top-0 w-20 h-2 bg-neutral-800 rounded-b-xl" /> {/* Band */}
           
           <Headphones size={90} className="text-neutral-700" strokeWidth={1} />

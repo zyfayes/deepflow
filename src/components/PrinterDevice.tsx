@@ -68,7 +68,7 @@ export function PrinterDevice({
   return (
     <div className="flex flex-col items-center w-full h-full">
         {/* Printer Visual */}
-        <div className="relative w-72 h-48 bg-white rounded-[2rem] shadow-2xl border border-neutral-100 flex flex-col items-center justify-end pb-6 z-10 ring-1 ring-black/5 mb-6 shrink-0">
+        <div className="relative w-full max-w-[18rem] aspect-[3/2] h-auto bg-white rounded-[2rem] shadow-2xl border border-neutral-100 flex flex-col items-center justify-end pb-6 z-10 ring-1 ring-black/5 mb-6">
             
             {/* Paper Animation - 优化后的叠放效果 */}
             <div className="absolute bottom-0 left-1/2 -translate-x-1/2" style={{ perspective: '1000px' }}>

@@ -1,5 +1,5 @@
 import { useState, useRef, type Dispatch, type SetStateAction, useEffect, useMemo } from 'react';
-import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Library, Tag, X, AlignLeft, Plus, AlertCircle, Mic2, Square, Copy, Check, Trash2, Glasses, Award } from 'lucide-react';
+import { Camera, FileText, Mic, Package, Play, Pause, Loader2, Sparkles, Brain, Library, Tag, X, AlignLeft, Plus, AlertCircle, Mic2, Square, Copy, Check, Trash2, Glasses, Award, Printer } from 'lucide-react';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLiveSession } from '../hooks/useLiveSession';
@@ -2709,7 +2709,7 @@ export function SupplyDepotApp({
                   </div>
                 ) : (
                   knowledgeCards.map(card => (
-                    <div key={card.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-col gap-3">
+                    <div key={card.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-col gap-3 group relative hover:shadow-md transition-all duration-300">
                       <div className="flex justify-between items-start gap-3">
                         <h3 className="font-bold text-slate-800 text-sm line-clamp-2">{card.title}</h3>
                         <span className="text-[10px] text-slate-400 font-mono shrink-0">
@@ -2719,12 +2719,27 @@ export function SupplyDepotApp({
                       <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap bg-slate-50 p-3 rounded-xl border border-slate-100 font-mono">
                         {card.content}
                       </p>
-                      <div className="flex gap-2 flex-wrap">
-                        {card.tags.map(tag => (
-                          <span key={tag} className="flex items-center gap-1 px-2 py-1 rounded-md bg-indigo-50 text-indigo-600 text-[10px] font-medium">
-                            <Tag size={10} /> {tag}
-                          </span>
-                        ))}
+                      <div className="flex flex-col gap-3 mt-1">
+                        <div className="flex gap-2 flex-wrap">
+                          {card.tags.map(tag => (
+                            <span key={tag} className="flex items-center gap-1 px-2 py-1 rounded-md bg-indigo-50 text-indigo-600 text-[10px] font-medium">
+                              <Tag size={10} /> {tag}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="flex justify-end">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onPrintTrigger?.(card);
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-600 text-white shadow-sm hover:bg-indigo-700 hover:shadow-md hover:scale-105 active:scale-95 transition-all duration-200"
+                            title="打印小票"
+                          >
+                            <Printer size={14} />
+                            <span className="text-xs font-bold">打印</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))
