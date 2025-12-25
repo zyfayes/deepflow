@@ -2350,7 +2350,15 @@ export function SupplyDepotApp({
 
   const confirmDeleteFile = () => {
     if (deleteConfirmDialog.fileId) {
+      console.log('Deleting file:', deleteConfirmDialog.fileId);
       setArchivedInputs(prev => prev.filter(input => input.id !== deleteConfirmDialog.fileId));
+      setRawInputs(prev => prev.filter(input => input.id !== deleteConfirmDialog.fileId));
+      
+      // Also remove from selectedFiles to prevent it from being included in generation
+      if (deleteConfirmDialog.fileName) {
+        setSelectedFiles(prev => prev.filter(file => file.name !== deleteConfirmDialog.fileName));
+      }
+      
       setDeleteConfirmDialog({ show: false, fileId: null, fileName: null });
     }
   };
@@ -2393,14 +2401,26 @@ export function SupplyDepotApp({
         {rawInputs.length > 0 && (
             <div className="space-y-2 mt-2 pt-2 border-t border-slate-100">
                 {rawInputs.map((input) => (
-                    <div key={input.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-50 text-xs">
+                    <div key={input.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-50 text-xs group">
                         <span className="text-slate-600 flex items-center gap-2 min-w-0" title={input.name}>
                             {input.type === '图片' && <Camera size={12} className="shrink-0" />}
                             {input.type === '文档' && <FileText size={12} className="shrink-0" />}
                             {input.type === '录音' && <Mic size={12} className="shrink-0" />}
                             <span className="truncate">{input.name || `${input.type}输入`}</span>
                         </span>
-                        <span className="text-slate-400 font-mono shrink-0 ml-2">{input.time}</span>
+                        <div className="flex items-center gap-2">
+                            <span className="text-slate-400 font-mono shrink-0">{input.time}</span>
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteFile(input.id, input.name);
+                                }}
+                                className="w-6 h-6 rounded bg-slate-100 text-slate-400 hover:bg-red-50 hover:text-red-600 flex items-center justify-center transition-colors"
+                                aria-label="删除文件"
+                            >
+                                <Trash2 size={12} />
+                            </button>
+                        </div>
                     </div>
                 ))}
             </div>
@@ -2841,7 +2861,7 @@ export function SupplyDepotApp({
       )}
 
       {deleteConfirmDialog.show && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center p-6">
+        <div className="absolute inset-0 z-[60] flex items-center justify-center p-6">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={cancelDeleteFile} />
           <div className="relative bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
             <div className="flex flex-col items-center gap-4">
