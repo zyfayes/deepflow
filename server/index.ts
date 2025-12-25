@@ -20,28 +20,59 @@ const WordExtractor = require('word-extractor');
 // Configure global proxy for all HTTP/HTTPS requests
 if (process.env.HTTP_PROXY || process.env.HTTPS_PROXY) {
   const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+  console.log(`🔌 Detected proxy configuration: ${proxyUrl}`);
   
   // Configure global-agent for http/https modules (used by axios, etc.)
-  const { bootstrap } = require('global-agent');
-  if (!process.env.GLOBAL_AGENT_HTTP_PROXY && process.env.HTTP_PROXY) {
-    process.env.GLOBAL_AGENT_HTTP_PROXY = process.env.HTTP_PROXY;
-  }
-  if (!process.env.GLOBAL_AGENT_HTTPS_PROXY && process.env.HTTPS_PROXY) {
-    process.env.GLOBAL_AGENT_HTTPS_PROXY = process.env.HTTPS_PROXY;
-  }
-  bootstrap();
-  
-  // Configure undici (Node.js 18+ fetch) to use proxy
   try {
-    const { ProxyAgent, setGlobalDispatcher } = require('undici');
-    const proxyAgent = new ProxyAgent(proxyUrl);
-    setGlobalDispatcher(proxyAgent);
-    console.log(`✅ Undici proxy configured: ${proxyUrl}`);
-  } catch (e) {
-    console.warn('⚠️  Could not configure undici proxy:', e);
+    const { bootstrap } = require('global-agent');
+    if (!process.env.GLOBAL_AGENT_HTTP_PROXY && process.env.HTTP_PROXY) {
+        process.env.GLOBAL_AGENT_HTTP_PROXY = process.env.HTTP_PROXY;
+    }
+    if (!process.env.GLOBAL_AGENT_HTTPS_PROXY && process.env.HTTPS_PROXY) {
+        process.env.GLOBAL_AGENT_HTTPS_PROXY = process.env.HTTPS_PROXY;
+    }
+    bootstrap();
+    console.log(`✅ global-agent configured`);
+  } catch (e: any) {
+    console.warn(`⚠️  Failed to load global-agent: ${e.message}`);
   }
   
-  console.log(`✅ Global proxy configured: ${proxyUrl}`);
+  // Configure undici (Node.js 18+ fetch) to use proxy - FORCE override
+  try {
+    const { ProxyAgent, setGlobalDispatcher, fetch: undiciFetch } = require('undici');
+    
+    // Create ProxyAgent with extended timeout
+    const proxyAgent = new ProxyAgent({
+        uri: proxyUrl,
+        connect: {
+            timeout: 60000
+        }
+    });
+    
+    // 1. Set as global dispatcher
+    setGlobalDispatcher(proxyAgent);
+    
+    // 2. Force override global fetch (Crucial for some environments)
+    // @ts-ignore
+    global.fetch = (input, init) => {
+        return undiciFetch(input, {
+            ...init,
+            dispatcher: proxyAgent
+        });
+    };
+    
+    console.log(`✅ Undici proxy configured & global.fetch overridden: ${proxyUrl}`);
+    
+    // 3. Test connection immediately
+    undiciFetch('https://generativelanguage.googleapis.com', { dispatcher: proxyAgent, method: 'HEAD' })
+        .then(() => console.log('✅ Proxy connection test successful (Google API reachable)'))
+        .catch((e: any) => console.warn(`⚠️  Proxy connection test failed: ${e.message}`));
+        
+  } catch (e: any) {
+    console.warn(`⚠️  Could not configure undici proxy: ${e.message}`);
+  }
+} else {
+    console.log("ℹ️  No proxy configuration detected. If you are in China, please set HTTPS_PROXY in .env or .env.local");
 }
 
 const app = express();

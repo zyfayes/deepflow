@@ -215,7 +215,7 @@ export function SupplyDepotApp({
     
     // 根据内容类型推断
     if (contentCategory === 'history') return 'commute';
-    if (contentCategory === 'math_geometry') return 'focus';
+    if (contentCategory === 'math_geometry' || contentCategory === 'physics') return 'focus';
     if (contentCategory === 'language') return 'qa_memory';
     
     // 根据标题和摘要中的关键词推断（用于问答式记忆）
@@ -2180,7 +2180,7 @@ export function SupplyDepotApp({
           }
         } else if (inferredSceneTag === 'focus' && !finalTitle.startsWith('静坐专注：')) {
           const textToCheck = `${originalTitle} ${summary}`.toLowerCase();
-          const mathKeywords = ['数学', '几何', 'math', 'geometry'];
+          const mathKeywords = ['数学', '几何', 'math', 'geometry', '物理', 'physics', '力学', '电磁', '热学', '光学', '原子'];
           if (mathKeywords.some(keyword => textToCheck.includes(keyword.toLowerCase()))) {
             finalTitle = '静坐专注：' + finalTitle;
           }
