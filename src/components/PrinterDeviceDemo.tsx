@@ -179,7 +179,7 @@ export function PrinterDeviceDemo({
                     // 添加轻微的弹跳效果
                     bounce: 0.2
                   }}
-                  className="absolute w-48 border border-neutral-200/80 p-4 text-[10px] font-mono text-neutral-700 origin-top"
+                  className="absolute w-48 border border-neutral-200/80 p-4 text-[10px] font-mono text-neutral-700 origin-top pointer-events-none"
                   style={{
                     bottom: -140,
                     left: '50%',
@@ -328,4 +328,3 @@ export function PrinterDeviceDemo({
     </div>
   );
 }
-

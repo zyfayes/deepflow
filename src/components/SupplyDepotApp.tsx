@@ -78,6 +78,9 @@ interface SupplyDepotAppProps {
   onUpdateKnowledgeCards: Dispatch<SetStateAction<KnowledgeCard[]>>;
   currentSceneTag: SceneTag;
   onSceneChange: (tag: SceneTag) => void;
+  environmentSwitchToken?: number;
+  environmentIntroToken?: number;
+  environmentIntroEndsAt?: number;
   onAvailableScenesChange?: (scenes: SceneTag[]) => void;
   onPlaybackStateChange?: (state: FlowPlaybackState) => void;
   onPrintTrigger?: (card: KnowledgeCard) => void;
@@ -95,6 +98,9 @@ export function SupplyDepotApp({
   onUpdateKnowledgeCards, 
   currentSceneTag,
   onSceneChange,
+  environmentSwitchToken,
+  environmentIntroToken,
+  environmentIntroEndsAt,
   onAvailableScenesChange,
   onPlaybackStateChange,
   onPrintTrigger,
@@ -532,13 +538,352 @@ export function SupplyDepotApp({
   const [currentPartIndex, setCurrentPartIndex] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [audioError, setAudioError] = useState<string | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const audioUrlRef = useRef<string | null>(null);
   const playRequestIdRef = useRef(0);
   const [copiedScript, setCopiedScript] = useState(false);
-  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const autoplayTimerRef = useRef<number | null>(null);
+  const envAutoplayGateRef = useRef<{ introToken?: number; endsAt: number }>({ endsAt: 0 });
+  const lastHandledEnvSwitchTokenRef = useRef<number | undefined>(undefined);
+
+  type MainPlaybackPhase = 'idle' | 'loading' | 'ready' | 'playing' | 'error';
+  type MainPlaybackState = {
+    sessionId: number;
+    phase: MainPlaybackPhase;
+    contentKey: string | null;
+    itemId: string | null;
+    sceneTag: SceneTag | null;
+    partIndex: number;
+    updatedAt: number;
+    error?: string;
+  };
+  const [mainPlayback, setMainPlayback] = useState<MainPlaybackState>({
+    sessionId: 0,
+    phase: 'idle',
+    contentKey: null,
+    itemId: null,
+    sceneTag: null,
+    partIndex: 0,
+    updatedAt: Date.now()
+  });
+  const mainPlaybackRef = useRef(mainPlayback);
+  useEffect(() => {
+    mainPlaybackRef.current = mainPlayback;
+  }, [mainPlayback]);
+  const isMainAudioPlaying = mainPlayback.phase === 'playing';
+  const isMainAudioLoading = mainPlayback.phase === 'loading';
+
+  const MAIN_AUDIO_PROGRESS_KEY_V1 = 'deepflow_last_main_audio_progress_v1';
+  const MAIN_AUDIO_PROGRESS_KEY_V2 = 'deepflow_main_audio_progress_v2';
+
+  type SavedMainAudioProgressV1 = {
+    itemId: string;
+    sceneTag: SceneTag;
+    time: number;
+    duration?: number;
+    partIndex: number;
+    updatedAt: number;
+  };
+
+  type SavedMainAudioProgress = {
+    contentKey: string;
+    itemId?: string;
+    sceneTag: SceneTag;
+    time: number;
+    duration?: number;
+    partIndex: number;
+    updatedAt: number;
+    partsCount?: number;
+    partsHash?: string;
+  };
+
+  type SavedMainAudioProgressStore = {
+    version: 2;
+    byKey: Record<string, SavedMainAudioProgress>;
+    recentKeys: string[];
+    lastGlobalKey?: string;
+    lastByScene: Partial<Record<SceneTag, string>>;
+    updatedAt: number;
+  };
+
+  const pendingSeekRef = useRef<{
+    contentKey: string;
+    partIndex: number;
+    time: number;
+    partsHash?: string;
+    applied: boolean;
+  } | null>(null);
+  const lastProgressWriteAtRef = useRef(0);
+
+  const stableHash32 = (input: string) => {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < input.length; i++) {
+      hash ^= input.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  };
+
+  const computeContentKey = (item: FlowItem): string => {
+    if (item.audioUrl) return `url:${item.audioUrl}`;
+    const preset = item.contentType === 'output' ? 'quick_summary' : item.contentType === 'discussion' ? 'deep_analysis' : '';
+    const lines = (item.script || [])
+      .map((l) => `${typeof l?.speaker === 'string' ? l.speaker : ''}\n${typeof l?.text === 'string' ? l.text : ''}`)
+      .join('\n---\n')
+      .trim();
+    return `tts:${item.contentType}:${preset}:${stableHash32(lines)}`;
+  };
+
+  const readSavedMainAudioProgressV1 = (): SavedMainAudioProgressV1 | null => {
+    try {
+      const raw = localStorage.getItem(MAIN_AUDIO_PROGRESS_KEY_V1);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as Partial<SavedMainAudioProgressV1>;
+      if (!parsed || typeof parsed !== 'object') return null;
+      if (!parsed.itemId || typeof parsed.itemId !== 'string') return null;
+      if (!parsed.sceneTag || typeof parsed.sceneTag !== 'string') return null;
+      if (typeof parsed.time !== 'number' || !Number.isFinite(parsed.time)) return null;
+      const partIndex = typeof parsed.partIndex === 'number' && Number.isFinite(parsed.partIndex) ? parsed.partIndex : 0;
+      const duration = typeof parsed.duration === 'number' && Number.isFinite(parsed.duration) ? parsed.duration : undefined;
+      const updatedAt = typeof parsed.updatedAt === 'number' && Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : Date.now();
+      return {
+        itemId: parsed.itemId,
+        sceneTag: parsed.sceneTag as SceneTag,
+        time: parsed.time,
+        duration,
+        partIndex,
+        updatedAt
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const defaultProgressStore = (): SavedMainAudioProgressStore => ({
+    version: 2,
+    byKey: {},
+    recentKeys: [],
+    lastByScene: {},
+    updatedAt: Date.now()
+  });
+
+  const readProgressStore = (): SavedMainAudioProgressStore => {
+    try {
+      const raw = localStorage.getItem(MAIN_AUDIO_PROGRESS_KEY_V2);
+      if (!raw) return defaultProgressStore();
+      const parsed = JSON.parse(raw) as Partial<SavedMainAudioProgressStore>;
+      if (!parsed || typeof parsed !== 'object') return defaultProgressStore();
+      if (parsed.version !== 2) return defaultProgressStore();
+      const byKey = parsed.byKey && typeof parsed.byKey === 'object' ? (parsed.byKey as Record<string, SavedMainAudioProgress>) : {};
+      const recentKeys = Array.isArray(parsed.recentKeys) ? parsed.recentKeys.filter((k) => typeof k === 'string') : [];
+      const lastByScene =
+        parsed.lastByScene && typeof parsed.lastByScene === 'object'
+          ? (parsed.lastByScene as Partial<Record<SceneTag, string>>)
+          : {};
+      return {
+        version: 2,
+        byKey,
+        recentKeys,
+        lastGlobalKey: typeof parsed.lastGlobalKey === 'string' ? parsed.lastGlobalKey : undefined,
+        lastByScene,
+        updatedAt: typeof parsed.updatedAt === 'number' && Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : Date.now()
+      };
+    } catch {
+      return defaultProgressStore();
+    }
+  };
+
+  const writeProgressStore = (store: SavedMainAudioProgressStore) => {
+    try {
+      localStorage.setItem(MAIN_AUDIO_PROGRESS_KEY_V2, JSON.stringify(store));
+    } catch {
+      // ignore
+    }
+  };
+
+  const getSavedProgressForItem = (item: FlowItem): SavedMainAudioProgress | null => {
+    const contentKey = computeContentKey(item);
+    const store = readProgressStore();
+    const existing = store.byKey[contentKey];
+    if (existing && existing.contentKey === contentKey) return existing;
+
+    // One-time migration path from v1 (itemId-based) when possible.
+    const legacy = readSavedMainAudioProgressV1();
+    if (legacy && legacy.itemId === item.id) {
+      const migrated: SavedMainAudioProgress = {
+        contentKey,
+        itemId: legacy.itemId,
+        sceneTag: legacy.sceneTag,
+        time: legacy.time,
+        duration: legacy.duration,
+        partIndex: legacy.partIndex,
+        updatedAt: legacy.updatedAt
+      };
+      store.byKey[contentKey] = migrated;
+      store.lastGlobalKey = contentKey;
+      store.lastByScene[legacy.sceneTag] = contentKey;
+      store.recentKeys = [contentKey, ...store.recentKeys.filter((k) => k !== contentKey)].slice(0, 20);
+      store.updatedAt = Date.now();
+      writeProgressStore(store);
+      return migrated;
+    }
+
+    return null;
+  };
+
+  const findItemByContentKey = (contentKey: string): FlowItem | null => {
+    for (const item of flowItems) {
+      if (computeContentKey(item) === contentKey) return item;
+    }
+    return null;
+  };
+
+  const shouldResumeFromProgress = (progress: { time: number; duration?: number }) => {
+    const minResumeSeconds = 5;
+    const tailGuardSeconds = 10;
+    if (progress.time < minResumeSeconds) return false;
+    if (progress.duration && progress.duration - progress.time < tailGuardSeconds) return false;
+    return true;
+  };
+
+  const persistMainAudioProgress = (mode: 'throttled' | 'force') => {
+    const audio = audioRef.current;
+    const activeItem = currentPlayingItem || selectedItem;
+    if (!audio || !activeItem) return;
+    if (activeItem.contentType === 'interactive') return;
+
+    const now = Date.now();
+    if (mode === 'throttled' && now - lastProgressWriteAtRef.current < 1000) return;
+    lastProgressWriteAtRef.current = now;
+
+    const contentKey = computeContentKey(activeItem);
+    const sceneTag = (activeItem.sceneTag || currentSceneTag) as SceneTag;
+    const partsCount = audioParts.length > 1 ? audioParts.length : undefined;
+    const partsHash = audioParts.length > 1 ? stableHash32(audioParts.join('|')) : undefined;
+
+    const store = readProgressStore();
+    store.byKey[contentKey] = {
+      contentKey,
+      itemId: activeItem.id,
+      sceneTag,
+      time: audio.currentTime || 0,
+      duration: Number.isFinite(audio.duration) ? audio.duration : undefined,
+      partIndex: currentPartIndex,
+      updatedAt: now,
+      partsCount,
+      partsHash
+    };
+    store.lastGlobalKey = contentKey;
+    store.lastByScene[sceneTag] = contentKey;
+    store.updatedAt = now;
+
+    store.recentKeys = [contentKey, ...store.recentKeys.filter((k) => k !== contentKey)].slice(0, 20);
+    writeProgressStore(store);
+  };
+
+  const applyPendingSeekIfNeeded = () => {
+    const pending = pendingSeekRef.current;
+    if (!pending || pending.applied) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const activeItem = currentPlayingItem || selectedItem;
+    if (!activeItem) return;
+    const activeKey = computeContentKey(activeItem);
+    if (activeKey !== pending.contentKey) return;
+    if (pending.partIndex !== currentPartIndex) return;
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+
+    if (pending.partsHash && audioParts.length > 1) {
+      const currentPartsHash = stableHash32(audioParts.join('|'));
+      if (currentPartsHash !== pending.partsHash) {
+        pending.time = 0;
+      }
+    }
+
+    const clamped = Math.min(Math.max(pending.time, 0), Math.max(audio.duration - 0.25, 0));
+    if (clamped > 0) {
+      try {
+        audio.currentTime = clamped;
+        setCurrentTime(clamped);
+      } catch {
+        // ignore
+      }
+    }
+    pending.applied = true;
+  };
+
+  const cancelPlaybackRequests = () => {
+    playRequestIdRef.current += 1;
+  };
+
+  const setMainPlaybackState = (next: Partial<MainPlaybackState> & { phase: MainPlaybackPhase }) => {
+    setMainPlayback((prev) => ({
+      ...prev,
+      ...next,
+      updatedAt: Date.now()
+    }));
+  };
+
+  const stopMainAudioPlayback = (mode: 'soft' | 'hard') => {
+    if (hlsRef.current) {
+      try {
+        hlsRef.current.destroy();
+      } catch {
+        // ignore
+      }
+      hlsRef.current = null;
+    }
+
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+        if (mode === 'hard') {
+          audioRef.current.removeAttribute('src');
+          audioRef.current.load();
+        }
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const stopMainAudio = (mode: 'soft' | 'hard') => {
+    persistMainAudioProgress('force');
+    pendingSeekRef.current = null;
+
+    cancelPlaybackRequests();
+    const nextPlaybackState: MainPlaybackState = {
+      sessionId: playRequestIdRef.current,
+      phase: 'idle',
+      contentKey: null,
+      itemId: null,
+      sceneTag: null,
+      partIndex: 0,
+      error: undefined,
+      updatedAt: Date.now()
+    };
+    mainPlaybackRef.current = nextPlaybackState;
+    setMainPlayback(nextPlaybackState);
+
+    if (autoplayTimerRef.current) {
+      window.clearTimeout(autoplayTimerRef.current);
+      autoplayTimerRef.current = null;
+    }
+    envAutoplayGateRef.current = { endsAt: 0 };
+
+    stopMainAudioPlayback(mode);
+    setAudioError(null);
+    setTTSProgress(null);
+    setAudioUrl(null);
+    setAudioParts([]);
+    setCurrentPartIndex(0);
+    setCurrentTime(0);
+    setDuration(0);
+  };
   
   // TTS 生成进度状态
   const [ttsProgress, setTTSProgress] = useState<{
@@ -621,6 +966,10 @@ export function SupplyDepotApp({
   );
 
   useEffect(() => {
+    audioUrlRef.current = audioUrl;
+  }, [audioUrl]);
+
+  useEffect(() => {
       if (isLiveMode && !liveSession.isConnected) {
           // Validate selectedItem and script before connecting
           if (!selectedItem) {
@@ -668,6 +1017,14 @@ export function SupplyDepotApp({
     }
   }, [playbackRate]);
 
+  // Keep env autoplay gate in sync with the latest intro timing updates from parent.
+  useEffect(() => {
+    if (environmentIntroToken === undefined) return;
+    if (envAutoplayGateRef.current.introToken !== environmentIntroToken) return;
+    if (typeof environmentIntroEndsAt !== 'number' || !Number.isFinite(environmentIntroEndsAt)) return;
+    envAutoplayGateRef.current.endsAt = environmentIntroEndsAt;
+  }, [environmentIntroToken, environmentIntroEndsAt]);
+
   useEffect(() => {
     // Cleanup previous HLS instance
     if (hlsRef.current) {
@@ -675,7 +1032,62 @@ export function SupplyDepotApp({
       hlsRef.current = null;
     }
 
+    if (autoplayTimerRef.current) {
+      window.clearTimeout(autoplayTimerRef.current);
+      autoplayTimerRef.current = null;
+    }
+
     if (audioUrl && audioRef.current) {
+      const canAutoplayNow = () => {
+        const gateEndsAt = envAutoplayGateRef.current.endsAt;
+        return !(gateEndsAt && Date.now() < gateEndsAt);
+      };
+
+      const scheduleAutoplay = (action: () => void) => {
+        const gateEndsAt = envAutoplayGateRef.current.endsAt;
+        if (!gateEndsAt) return action();
+        const delay = Math.max(0, gateEndsAt - Date.now());
+        autoplayTimerRef.current = window.setTimeout(() => {
+          autoplayTimerRef.current = null;
+          action();
+        }, delay);
+      };
+
+      const tryPlay = () => {
+        if (!audioRef.current) return;
+        const playPromise = audioRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((err) => {
+            if (err?.name === 'AbortError') {
+              console.log('Play interrupted by new request');
+              return;
+            }
+            console.error('Play failed:', err);
+            setAudioError('播放失败，请重试');
+          });
+        }
+      };
+
+      const requestAutoplay = () => {
+        const expectedSessionId = mainPlaybackRef.current.sessionId;
+        const expectedAudioUrl = audioUrl;
+        if (canAutoplayNow()) {
+          tryPlay();
+        } else {
+          scheduleAutoplay(() => {
+            // Only autoplay if we are still on the same audioUrl / session.
+            if (!audioRef.current) return;
+            if (mainPlaybackRef.current.sessionId !== expectedSessionId) return;
+            if (audioUrlRef.current !== expectedAudioUrl) return;
+            if (!canAutoplayNow()) {
+              requestAutoplay();
+              return;
+            }
+            tryPlay();
+          });
+        }
+      };
+
       const isHls = audioUrl.endsWith('.m3u8') || audioUrl.includes('m3u8');
       
       if (isHls && Hls.isSupported()) {
@@ -684,17 +1096,7 @@ export function SupplyDepotApp({
         hls.loadSource(audioUrl);
         hls.attachMedia(audioRef.current);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          const playPromise = audioRef.current?.play();
-          if (playPromise !== undefined) {
-              playPromise.catch(err => {
-                  if (err.name === 'AbortError') {
-                      console.log('HLS Play interrupted by new request');
-                      return;
-                  }
-                  console.error('HLS Play failed:', err);
-                  setAudioError('播放失败，请重试');
-              });
-          }
+          requestAutoplay();
         });
         hls.on(Hls.Events.ERROR, (_event, data) => {
              if (data.fatal) {
@@ -716,17 +1118,7 @@ export function SupplyDepotApp({
       } else if (isHls && audioRef.current.canPlayType('application/vnd.apple.mpegurl')) {
         // Native HLS support (Safari)
         audioRef.current.src = audioUrl;
-        const playPromise = audioRef.current.play();
-        if (playPromise !== undefined) {
-            playPromise.catch(err => {
-                if (err.name === 'AbortError') {
-                    console.log('Native HLS Play interrupted by new request');
-                    return;
-                }
-                console.error('Native HLS Play failed:', err);
-                setAudioError('播放失败: 无法播放此音频格式');
-            });
-        }
+        requestAutoplay();
       } else {
         // Standard playback (MP3/WAV) - Fallback
         // If it's an m3u8 file and we reached here, it means neither HLS.js nor Native HLS is supported
@@ -737,23 +1129,7 @@ export function SupplyDepotApp({
         }
         
         audioRef.current.src = audioUrl;
-        const playPromise = audioRef.current.play();
-        if (playPromise !== undefined) {
-            playPromise.catch(err => {
-                if (err.name === 'AbortError') {
-                    console.log('Play interrupted by new request');
-                    return;
-                }
-                
-                console.error('Play failed:', err);
-                // Handle specific NotSupportedError
-                if (err.name === 'NotSupportedError') {
-                    setAudioError('播放失败: 浏览器不支持此音频格式');
-                } else {
-                    setAudioError('播放失败，请重试');
-                }
-            });
-        }
+        requestAutoplay();
       }
     }
     
@@ -761,6 +1137,10 @@ export function SupplyDepotApp({
         if (hlsRef.current) {
             hlsRef.current.destroy();
             hlsRef.current = null;
+        }
+        if (autoplayTimerRef.current) {
+          window.clearTimeout(autoplayTimerRef.current);
+          autoplayTimerRef.current = null;
         }
         // Cleanup blob URLs to prevent memory leaks
         if (audioUrl && audioUrl.startsWith('blob:')) {
@@ -967,7 +1347,7 @@ export function SupplyDepotApp({
   // Sync playback state - 支持详情页播放和 go flow 模式
   const prevPlaybackStateRef = useRef<string>('');
   useEffect(() => {
-     if (onPlaybackStateChange) {
+    if (onPlaybackStateChange) {
          // 优先使用 currentPlayingItem，如果没有则使用 selectedItem（详情页播放）
          const activeItem = currentPlayingItem || selectedItem;
          
@@ -1008,7 +1388,7 @@ export function SupplyDepotApp({
          const finalEndTime = subtitleEndTime !== undefined ? subtitleEndTime : currentSubtitleInfo.endTime;
          
          const newPlaybackState: FlowPlaybackState = {
-             isPlaying: isAudioPlaying,
+             isPlaying: isMainAudioPlaying,
              currentText: finalText,
              playbackMode: isLiveMode ? 'live' : 'audio',
              currentTime: currentTime,
@@ -1035,15 +1415,66 @@ export function SupplyDepotApp({
            });
          }
      }
-  }, [isAudioPlaying, currentSubtitle, currentSubtitleInfo, currentPlayingItem, selectedItem, isLiveMode, currentTime, duration, onPlaybackStateChange, onPrintTrigger]);
+  }, [isMainAudioPlaying, currentSubtitle, currentSubtitleInfo, currentPlayingItem, selectedItem, isLiveMode, currentTime, duration, onPlaybackStateChange, onPrintTrigger]);
 
   // 自动播放逻辑：进入全屏心流页面时自动播放 (Enhanced)
   useEffect(() => {
-    if (isFlowing && !hasAutoPlayed && sceneTagsArray.length > 0) {
-      // Use the first valid scene from our filtered list
-      const targetScene = sceneTagsArray[0];
-      
-      // If we are not on a valid scene, switch to it
+    if (!isFlowing) return;
+    if (isLiveMode) return;
+    if (sceneTagsArray.length === 0) return;
+
+    const envForced =
+      environmentSwitchToken !== undefined &&
+      environmentSwitchToken !== lastHandledEnvSwitchTokenRef.current;
+
+    // Entering flow
+    if (!hasAutoPlayed) {
+      if (envForced) {
+        lastHandledEnvSwitchTokenRef.current = environmentSwitchToken;
+        envAutoplayGateRef.current = {
+          introToken: environmentIntroToken,
+          endsAt: typeof environmentIntroEndsAt === 'number' && Number.isFinite(environmentIntroEndsAt) ? environmentIntroEndsAt : 0
+        };
+      } else {
+        const store = readProgressStore();
+        const candidateKeys = [
+          store.lastGlobalKey,
+          store.lastByScene[currentSceneTag],
+          ...(store.recentKeys || [])
+        ].filter((k): k is string => typeof k === 'string' && k.length > 0);
+
+        for (const key of candidateKeys) {
+          const savedItem = findItemByContentKey(key);
+          const savedProgress = savedItem ? getSavedProgressForItem(savedItem) : null;
+          if (savedItem && savedProgress && shouldResumeFromProgress(savedProgress) && getPlayableItems([savedItem]).length > 0) {
+            if (savedItem.sceneTag && savedItem.sceneTag !== currentSceneTag) {
+              onSceneChange(savedItem.sceneTag);
+            }
+            setCurrentPlayingItem(savedItem);
+            setSelectedItem(savedItem);
+            handlePlayAudio(savedItem, false);
+            setHasAutoPlayed(true);
+            return;
+          }
+        }
+
+        const legacy = readSavedMainAudioProgressV1();
+        if (legacy && shouldResumeFromProgress(legacy)) {
+          const legacyItem = flowItems.find((it) => it.id === legacy.itemId);
+          if (legacyItem && getPlayableItems([legacyItem]).length > 0) {
+            if (legacyItem.sceneTag && legacyItem.sceneTag !== currentSceneTag) {
+              onSceneChange(legacyItem.sceneTag);
+            }
+            setCurrentPlayingItem(legacyItem);
+            setSelectedItem(legacyItem);
+            handlePlayAudio(legacyItem, false);
+            setHasAutoPlayed(true);
+            return;
+          }
+        }
+      }
+
+      const targetScene = sceneTagsArray.includes(currentSceneTag) ? currentSceneTag : sceneTagsArray[0];
       if (currentSceneTag !== targetScene) {
           onSceneChange(targetScene);
       }
@@ -1063,28 +1494,39 @@ export function SupplyDepotApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFlowing, hasAutoPlayed, sceneTagsArray]); // Removed flowItems dependency to avoid loops, rely on sceneTagsArray which depends on flowItems
 
-  // 场景切换时自动播放（如果已经在 FlowList 模式）
+  // 场景强制切换和普通场景切换时的自动播放逻辑
   useEffect(() => {
-    // 如果用户刚刚手动触发了播放，不自动切换
-    if (isUserInitiatedPlay) {
-      // 延迟重置标志，给音频播放一些时间
-      const timer = setTimeout(() => {
-        setIsUserInitiatedPlay(false);
-      }, 1000); // 1秒后重置
-      return () => clearTimeout(timer);
-    }
-    
-    // 如果当前正在播放音频，不自动切换（避免覆盖用户正在播放的内容）
-    if (isAudioPlaying || isPlayingAudio) {
+    if (!isFlowing) return;
+    if (isLiveMode) return;
+    if (sceneTagsArray.length === 0) return;
+
+    const envForced =
+      environmentSwitchToken !== undefined &&
+      environmentSwitchToken !== lastHandledEnvSwitchTokenRef.current;
+
+    // Forced environment scene switch (restart immediately from beginning)
+    if (envForced) {
+      lastHandledEnvSwitchTokenRef.current = environmentSwitchToken;
+      envAutoplayGateRef.current = {
+        introToken: environmentIntroToken,
+        endsAt: typeof environmentIntroEndsAt === 'number' && Number.isFinite(environmentIntroEndsAt) ? environmentIntroEndsAt : 0
+      };
+      const playableItems = getPlayableItems(flowItems, currentSceneTag);
+      if (playableItems.length > 0) {
+        const firstItem = playableItems[0];
+        setCurrentPlayingItem(firstItem);
+        setSelectedItem(firstItem);
+        handlePlayAudio(firstItem, false, { skipResume: true });
+      }
       return;
     }
-    
-    // 如果当前播放项存在且属于当前场景，不自动切换
-    if (currentPlayingItem && currentPlayingItem.sceneTag === currentSceneTag) {
-      return;
-    }
-    
-    if (isFlowing && currentSceneTag && sceneTagsArray.includes(currentSceneTag)) {
+
+    // Normal scene change auto-start (only when idle)
+    if (isUserInitiatedPlay) return;
+    if (isMainAudioPlaying || isMainAudioLoading) return;
+    if (currentPlayingItem && (currentPlayingItem.sceneTag || 'default') === currentSceneTag) return;
+
+    if (sceneTagsArray.includes(currentSceneTag)) {
       const playableItems = getPlayableItems(flowItems, currentSceneTag);
       if (playableItems.length > 0) {
         const firstItem = playableItems[0];
@@ -1098,7 +1540,20 @@ export function SupplyDepotApp({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSceneTag, isFlowing]); // 当场景切换且已在 FlowList 模式时触发
+  }, [
+    isFlowing,
+    isLiveMode,
+    hasAutoPlayed,
+    currentSceneTag,
+    sceneTagsArray,
+    environmentSwitchToken,
+    isUserInitiatedPlay,
+    isMainAudioPlaying,
+    isMainAudioLoading,
+    currentPlayingItem,
+    flowItems,
+    onSceneChange
+  ]);
 
   // 退出全屏时重置状态
   useEffect(() => {
@@ -1108,7 +1563,6 @@ export function SupplyDepotApp({
       setCurrentPlayingItem(null);
       if (audioRef.current) {
         audioRef.current.pause();
-        setIsAudioPlaying(false);
       }
       
       // 结束激励会话（如果是正常结束）
@@ -1128,9 +1582,9 @@ export function SupplyDepotApp({
   // 监听音频播放状态，检测分心
   useEffect(() => {
     if (isSessionActive) {
-      checkDistraction(isAudioPlaying);
+      checkDistraction(isMainAudioPlaying);
     }
-  }, [isAudioPlaying, isSessionActive, checkDistraction]);
+  }, [isMainAudioPlaying, isSessionActive, checkDistraction]);
 
   // 同步当前播放项状态
   useEffect(() => {
@@ -1139,10 +1593,33 @@ export function SupplyDepotApp({
     }
   }, [selectedItem]);
 
-  const handlePlayAudio = async (item: FlowItem, userInitiated: boolean = false) => {
+  const handlePlayAudio = async (item: FlowItem, userInitiated: boolean = false, options: { skipResume?: boolean } = {}) => {
     const requestId = ++playRequestIdRef.current;
     const isActiveRequest = () => playRequestIdRef.current === requestId;
     console.log('[PlayAudio] Starting for item:', item.id, item.contentType, 'userInitiated:', userInitiated);
+
+    const skipResume = options.skipResume === true;
+    const savedProgress = !skipResume ? getSavedProgressForItem(item) : null;
+    const resumeProgress = savedProgress && shouldResumeFromProgress(savedProgress) ? savedProgress : null;
+    const contentKey = computeContentKey(item);
+    setMainPlaybackState({
+      sessionId: requestId,
+      phase: 'loading',
+      contentKey,
+      itemId: item.id,
+      sceneTag: (item.sceneTag || currentSceneTag) as SceneTag,
+      partIndex: 0,
+      error: undefined
+    });
+    pendingSeekRef.current = resumeProgress
+      ? {
+          contentKey,
+          partIndex: resumeProgress.partIndex ?? 0,
+          time: resumeProgress.time,
+          partsHash: resumeProgress.partsHash,
+          applied: false
+        }
+      : null;
     
     // 如果是用户手动触发的播放，设置标志
     if (userInitiated) {
@@ -1167,10 +1644,6 @@ export function SupplyDepotApp({
       setCurrentPlayingItem(item);
       setSelectedItem(item);
       
-      // 对于直接音频 URL，不需要 TTS 生成
-      // 但是我们需要设置一个临时标志，防止场景切换逻辑在音频播放前干扰
-      // 使用 isPlayingAudio 作为临时保护（虽然它主要用于 TTS，但这里作为保护机制）
-      setIsPlayingAudio(true);
       setAudioError(null);
       setAudioUrl(item.audioUrl);
       setAudioParts([item.audioUrl]);
@@ -1178,6 +1651,14 @@ export function SupplyDepotApp({
       setCurrentTime(0);
       setDuration(0);
       setTTSProgress(null);
+      setMainPlaybackState({
+        phase: 'ready',
+        contentKey,
+        itemId: item.id,
+        sceneTag: (item.sceneTag || currentSceneTag) as SceneTag,
+        partIndex: 0,
+        error: undefined
+      });
       
       // 用户手势内直接触发播放（避免某些浏览器把 useEffect 里的 play() 判为非用户触发而拦截）
       if (audioRef.current) {
@@ -1209,24 +1690,24 @@ export function SupplyDepotApp({
         } : i
       ));
       
-      // 对于直接音频 URL，audioUrl 的 useEffect 会自动处理播放
-      // 当音频真正开始播放时，onPlay 事件会设置 isAudioPlaying = true
-      // 然后我们可以在 onPlay 中重置 isPlayingAudio = false（因为不需要 TTS）
-      // 这样场景切换逻辑就会依赖 isAudioPlaying 来判断是否正在播放
-      
       return; // 直接使用音频文件，跳过 TTS 流程
     }
     
     // 原有的 TTS 逻辑
-    if (!item.script) return;
+    if (!item.script) {
+      const msg = '无法生成音频：脚本内容为空';
+      setAudioError(msg);
+      setMainPlaybackState({ phase: 'error', error: msg });
+      return;
+    }
     
     // 实时练习类 items 不应该调用 TTS API
     if (item.contentType === 'interactive') {
       console.warn('Interactive items should use live session, not TTS');
+      setMainPlaybackState({ phase: 'idle', error: undefined });
       return;
     }
     
-    setIsPlayingAudio(true);
     setAudioError(null);
     setAudioUrl(null);
     setAudioParts([]);
@@ -1278,10 +1759,26 @@ export function SupplyDepotApp({
           
           // 设置音频（无论是否显示 loading）
           if (!isActiveRequest()) return;
+          if (pendingSeekRef.current && pendingSeekRef.current.contentKey === computeContentKey(item)) {
+            if (pendingSeekRef.current.partIndex !== 0) {
+              pendingSeekRef.current.partIndex = 0;
+            }
+            if (pendingSeekRef.current.partsHash) {
+              pendingSeekRef.current.time = 0;
+              pendingSeekRef.current.partsHash = undefined;
+            }
+          }
           setAudioUrl(cachedAudioUrl);
           setAudioParts([cachedAudioUrl]);
           setCurrentPartIndex(0);
-          setIsPlayingAudio(false);
+          setMainPlaybackState({
+            phase: 'ready',
+            contentKey: computeContentKey(item),
+            itemId: item.id,
+            sceneTag: (item.sceneTag || currentSceneTag) as SceneTag,
+            partIndex: 0,
+            error: undefined
+          });
           
           // 标记 item 为已开始播放
           if (!isActiveRequest()) return;
@@ -1329,13 +1826,13 @@ export function SupplyDepotApp({
     }));
 
     // 检查脚本是否为空
-    if (!item.script || item.script.length === 0) {
-        console.warn('[SupplyDepot] Script is empty, skipping TTS generation');
-        setAudioError('无法生成音频：脚本内容为空');
-        setIsPlayingAudio(false);
-        setTTSProgress(null);
-        return;
-    }
+	    if (!item.script || item.script.length === 0) {
+	        console.warn('[SupplyDepot] Script is empty, skipping TTS generation');
+	        setAudioError('无法生成音频：脚本内容为空');
+	        setMainPlaybackState({ phase: 'error', error: '无法生成音频：脚本内容为空' });
+	        setTTSProgress(null);
+	        return;
+	    }
 
     try {
       const sanitizedScript = item.script
@@ -1345,13 +1842,13 @@ export function SupplyDepotApp({
         }))
         .filter((line) => line.text.trim().length > 0);
 
-      if (sanitizedScript.length === 0) {
-        console.warn('[SupplyDepot] Script has no valid text lines, skipping TTS generation');
-        setAudioError('无法生成音频：脚本内容为空');
-        setIsPlayingAudio(false);
-        setTTSProgress(null);
-        return;
-      }
+	      if (sanitizedScript.length === 0) {
+	        console.warn('[SupplyDepot] Script has no valid text lines, skipping TTS generation');
+	        setAudioError('无法生成音频：脚本内容为空');
+	        setMainPlaybackState({ phase: 'error', error: '无法生成音频：脚本内容为空' });
+	        setTTSProgress(null);
+	        return;
+	      }
 
       // 判断使用哪种模式
       const isQuickSummary = item.contentType === 'output';
@@ -1510,9 +2007,26 @@ export function SupplyDepotApp({
         if (!result.url.startsWith('data:')) {
           proxyUrl = `${getApiUrl('/api/proxy-audio')}?url=${encodeURIComponent(result.url)}`;
         }
+        if (pendingSeekRef.current && pendingSeekRef.current.contentKey === computeContentKey(item)) {
+          if (pendingSeekRef.current.partIndex !== 0) {
+            pendingSeekRef.current.partIndex = 0;
+          }
+          if (pendingSeekRef.current.partsHash) {
+            pendingSeekRef.current.time = 0;
+            pendingSeekRef.current.partsHash = undefined;
+          }
+        }
         setAudioUrl(proxyUrl);
         setAudioParts([proxyUrl]);
         setCurrentPartIndex(0);
+        setMainPlaybackState({
+          phase: 'ready',
+          contentKey: computeContentKey(item),
+          itemId: item.id,
+          sceneTag: (item.sceneTag || currentSceneTag) as SceneTag,
+          partIndex: 0,
+          error: undefined
+        });
       } else if (result.urls && Array.isArray(result.urls)) {
         const parts: string[] = result.urls
           .map((u: string | { url?: string }) => (typeof u === 'string' ? u : u.url || ''))
@@ -1526,9 +2040,35 @@ export function SupplyDepotApp({
           throw new Error('No valid audio URLs returned');
         }
 
+        const contentKey = computeContentKey(item);
+        const currentPartsHash = stableHash32(parts.join('|'));
+        if (pendingSeekRef.current && pendingSeekRef.current.contentKey === contentKey && pendingSeekRef.current.partsHash) {
+          if (pendingSeekRef.current.partsHash !== currentPartsHash) {
+            pendingSeekRef.current.partIndex = 0;
+            pendingSeekRef.current.time = 0;
+            pendingSeekRef.current.partsHash = currentPartsHash;
+          }
+        }
+
+        const resumePartIndex =
+          pendingSeekRef.current && pendingSeekRef.current.contentKey === contentKey && Number.isFinite(pendingSeekRef.current.partIndex)
+            ? pendingSeekRef.current.partIndex
+            : 0;
+        const initialPartIndex = resumePartIndex >= 0 && resumePartIndex < parts.length ? resumePartIndex : 0;
+        if (pendingSeekRef.current) {
+          pendingSeekRef.current.partIndex = initialPartIndex;
+        }
         setAudioParts(parts);
-        setCurrentPartIndex(0);
-        setAudioUrl(parts[0]);
+        setCurrentPartIndex(initialPartIndex);
+        setAudioUrl(parts[initialPartIndex]);
+        setMainPlaybackState({
+          phase: 'ready',
+          contentKey,
+          itemId: item.id,
+          sceneTag: (item.sceneTag || currentSceneTag) as SceneTag,
+          partIndex: initialPartIndex,
+          error: undefined
+        });
       } else {
         throw new Error('Invalid API response format');
       }
@@ -1550,7 +2090,7 @@ export function SupplyDepotApp({
     } catch (error: any) {
       if (!isActiveRequest()) return;
       console.error("TTS Error", error);
-      setIsPlayingAudio(false);
+      setMainPlaybackState({ phase: 'error', error: error?.message || '音频生成失败' });
       setTTSProgress(null);
       setAudioError(error.message || "音频生成失败，请重试");
     }
@@ -1559,6 +2099,14 @@ export function SupplyDepotApp({
   const handleAudioError = (e: any) => {
       console.error("Audio Load Error", e);
       setAudioError("Failed to load audio segment. Network error or format not supported.");
+      const activeItem = currentPlayingItem || selectedItem;
+      if (!activeItem) {
+        setMainPlaybackState({ phase: 'error', error: '音频加载失败' });
+        return;
+      }
+      const key = computeContentKey(activeItem);
+      if (mainPlaybackRef.current.contentKey && mainPlaybackRef.current.contentKey !== key) return;
+      setMainPlaybackState({ phase: 'error', error: '音频加载失败' });
   };
 
   const renderAudioPlayer = () => (
@@ -1578,15 +2126,35 @@ export function SupplyDepotApp({
           }}
           onError={handleAudioError}
           onPlay={() => {
-            setIsAudioPlaying(true);
-            // 如果是直接音频 URL（默认音频），重置 isPlayingAudio
-            // 因为直接音频不需要 TTS 生成，isPlayingAudio 只是临时保护
-            if (currentPlayingItem?.audioUrl) {
-              setIsPlayingAudio(false);
-            }
+            applyPendingSeekIfNeeded();
+            const activeItem = currentPlayingItem || selectedItem;
+            if (!activeItem) return;
+            const key = computeContentKey(activeItem);
+            if (mainPlaybackRef.current.contentKey && mainPlaybackRef.current.contentKey !== key) return;
+            setMainPlaybackState({
+              phase: 'playing',
+              contentKey: key,
+              itemId: activeItem.id,
+              sceneTag: (activeItem.sceneTag || currentSceneTag) as SceneTag,
+              partIndex: currentPartIndex,
+              error: undefined
+            });
           }}
           onPause={() => {
-            setIsAudioPlaying(false);
+            persistMainAudioProgress('force');
+            const activeItem = currentPlayingItem || selectedItem;
+            if (!activeItem) return;
+            const key = computeContentKey(activeItem);
+            if (mainPlaybackRef.current.phase === 'idle') return;
+            if (mainPlaybackRef.current.contentKey && mainPlaybackRef.current.contentKey !== key) return;
+            setMainPlaybackState({
+              phase: 'ready',
+              contentKey: key,
+              itemId: activeItem.id,
+              sceneTag: (activeItem.sceneTag || currentSceneTag) as SceneTag,
+              partIndex: currentPartIndex,
+              error: undefined
+            });
             if (selectedItem) {
               setFlowItems(prev => prev.map(item => {
                 if (item.id === selectedItem.id && item.status === 'playing') {
@@ -1600,8 +2168,12 @@ export function SupplyDepotApp({
             }
           }}
           onEnded={() => {
-            setIsPlayingAudio(false);
-            setIsAudioPlaying(false);
+            persistMainAudioProgress('force');
+            const activeItem = currentPlayingItem || selectedItem;
+            if (!activeItem) return;
+            const key = computeContentKey(activeItem);
+            if (mainPlaybackRef.current.contentKey && mainPlaybackRef.current.contentKey !== key) return;
+
             if (audioParts.length > 0 && currentPartIndex < audioParts.length - 1) {
               const nextIndex = currentPartIndex + 1;
               const nextUrl = audioParts[nextIndex];
@@ -1609,8 +2181,24 @@ export function SupplyDepotApp({
               setAudioUrl(nextUrl);
               setCurrentTime(0);
               setDuration(0);
+              setMainPlaybackState({
+                phase: 'ready',
+                contentKey: key,
+                itemId: activeItem.id,
+                sceneTag: (activeItem.sceneTag || currentSceneTag) as SceneTag,
+                partIndex: nextIndex,
+                error: undefined
+              });
               return;
             }
+            setMainPlaybackState({
+              phase: 'idle',
+              contentKey: null,
+              itemId: null,
+              sceneTag: null,
+              partIndex: 0,
+              error: undefined
+            });
             if (selectedItem) {
               setFlowItems(prev => prev.map(item => {
                 if (item.id === selectedItem.id) {
@@ -2492,24 +3080,22 @@ export function SupplyDepotApp({
     if (!isFlowing) return;
     
     const playableItems = getPlayableItems(flowItems, currentSceneTag);
-    if (playableItems.length > 0) {
-      const firstItem = playableItems[0];
-      if (currentPlayingItem?.id !== firstItem.id) {
+      if (playableItems.length > 0) {
+        const firstItem = playableItems[0];
+        if (currentPlayingItem?.id !== firstItem.id) {
           if (audioRef.current) {
             audioRef.current.pause();
-            setIsAudioPlaying(false);
           }
           setCurrentPlayingItem(firstItem);
           setSelectedItem(firstItem);
           handlePlayAudio(firstItem);
       }
-    } else {
-      if (currentPlayingItem && !playableItems.some(i => i.id === currentPlayingItem.id)) {
+      } else {
+        if (currentPlayingItem && !playableItems.some(i => i.id === currentPlayingItem.id)) {
           setCurrentPlayingItem(null);
           setSelectedItem(null);
           if (audioRef.current) {
             audioRef.current.pause();
-            setIsAudioPlaying(false);
           }
       }
     }
@@ -3140,19 +3726,13 @@ export function SupplyDepotApp({
                   <div className="relative z-10 text-white">
                       {/* Close Button Row - Separate Line */}
                       <div className="flex justify-end px-2 pt-2">
-                          <button 
-                              onClick={() => {
-                                setSelectedItem(null);
-                                playRequestIdRef.current += 1;
-                                setIsPlayingAudio(false);
-                                setTTSProgress(null);
-                                if (audioRef.current) {
-                                  audioRef.current.pause();
-                                }
-                                setIsAudioPlaying(false);
-                              }} 
-                              className="w-8 h-8 flex items-center justify-center text-white/60 hover:text-white transition-colors"
-                          >
+	                          <button 
+	                              onClick={() => {
+	                                setSelectedItem(null);
+	                                stopMainAudio('hard');
+	                              }} 
+	                              className="w-8 h-8 flex items-center justify-center text-white/60 hover:text-white transition-colors"
+	                          >
                               <X size={18} />
                           </button>
                       </div>
@@ -3270,7 +3850,7 @@ export function SupplyDepotApp({
                                           }}
                                           className="w-10 h-10 rounded-full bg-white/90 hover:bg-white flex items-center justify-center text-slate-900 transition-all hover:scale-105"
                                       >
-                                          {isAudioPlaying ? (
+                                          {isMainAudioPlaying ? (
                                               <Pause size={16} fill="currentColor" />
                                           ) : (
                                               <Play size={16} fill="currentColor" />
@@ -3353,11 +3933,11 @@ export function SupplyDepotApp({
                           ) : (
                               <button 
                                   onClick={() => handlePlayAudio(selectedItem, true)} // 用户手动点击
-                                  disabled={isPlayingAudio}
+                                  disabled={isMainAudioLoading}
                                   className="mt-4 px-8 py-3 bg-white text-slate-900 rounded-full font-bold flex items-center gap-2 hover:scale-105 transition-transform"
                               >
-                                  {isPlayingAudio ? <Loader2 className="animate-spin" /> : <Play fill="currentColor" />}
-                                  {isPlayingAudio ? "Generating Audio..." : "Play Podcast"}
+                                  {isMainAudioLoading ? <Loader2 className="animate-spin" /> : <Play fill="currentColor" />}
+                                  {isMainAudioLoading ? "Generating Audio..." : "Play Podcast"}
                               </button>
                           )
                               )
