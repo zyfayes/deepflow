@@ -418,7 +418,7 @@ function App() {
           </div>
           
           <a 
-            href="/deck.html" 
+            href="https://gamma.app/docs/DeepFlow-Station-2wwpdsu2agcl1km" 
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 px-5 py-2.5 bg-white hover:bg-neutral-50 rounded-full border border-neutral-200 shadow-sm hover:shadow transition-all group"
